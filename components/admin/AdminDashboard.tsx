@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useAppContext } from '../../context/AppContext';
 import { Plan, ThemeOption, PixKeyType, Lead } from '../../types';
-import { LogOut, Users, CreditCard, Settings, Download, Trash2, Plus, Palette, Image as ImageIcon, Save, Edit2, XCircle, Upload, Smartphone, Search, MonitorPlay, Tv, Briefcase } from 'lucide-react';
+import { LogOut, Users, CreditCard, Settings, Download, Trash2, Plus, Palette, Image as ImageIcon, Save, Edit2, XCircle, Upload, Smartphone, Search, MonitorPlay, Tv, Briefcase, Loader2 } from 'lucide-react';
 import { THEME_CONFIG } from '../../constants';
 
 type Tab = 'content' | 'plans' | 'leads' | 'seo' | 'instructions';
@@ -24,6 +24,7 @@ const AdminDashboard: React.FC = () => {
   // Local state for settings to simulate "Save Changes" feeling
   const [localContent, setLocalContent] = useState(content);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+  const [uploadingField, setUploadingField] = useState<string | null>(null);
 
   // Sync local content when global content changes (e.g. initial load)
   React.useEffect(() => {
@@ -46,21 +47,41 @@ const AdminDashboard: React.FC = () => {
     handleLocalUpdate({ instructions: updatedInstructions });
   };
 
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>, field: 'heroImage' | 'logoImage' | 'seoImage') => {
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>, field: 'heroImage' | 'logoImage' | 'seoImage') => {
     const file = e.target.files?.[0];
     if (file) {
-      // Check file size (limit to ~2MB to prevent LocalStorage issues)
-      if (file.size > 2 * 1024 * 1024) {
-        alert("A imagem é muito grande. Por favor, escolha uma imagem menor que 2MB.");
+      if (file.size > 5 * 1024 * 1024) {
+        alert("A imagem é muito grande. O limite é 5MB.");
         return;
       }
 
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        const base64String = reader.result as string;
-        handleLocalUpdate({ [field]: base64String });
-      };
-      reader.readAsDataURL(file);
+      setUploadingField(field);
+
+      const formData = new FormData();
+      formData.append('file', file);
+
+      try {
+        const res = await fetch('/api/upload', {
+          method: 'POST',
+          body: formData,
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          if (data.success && data.url) {
+            handleLocalUpdate({ [field]: data.url });
+          } else {
+             alert('Erro ao processar imagem.');
+          }
+        } else {
+          alert('Erro no upload. Tente novamente.');
+        }
+      } catch (err) {
+        console.error("Upload error", err);
+        alert("Erro ao conectar com o servidor.");
+      } finally {
+        setUploadingField(null);
+      }
     }
   };
 
@@ -270,11 +291,12 @@ const AdminDashboard: React.FC = () => {
                           </div>
                       )}
                       <div className="flex-1">
-                          <label className="cursor-pointer bg-slate-700 hover:bg-slate-600 text-white px-4 py-2 rounded inline-flex items-center gap-2 transition">
-                              <Upload className="w-4 h-4" /> Fazer Upload da Logo
-                              <input type="file" className="hidden" accept="image/*" onChange={(e) => handleImageUpload(e, 'logoImage')} />
+                          <label className={`cursor-pointer bg-slate-700 hover:bg-slate-600 text-white px-4 py-2 rounded inline-flex items-center gap-2 transition ${uploadingField === 'logoImage' ? 'opacity-50 cursor-wait' : ''}`}>
+                              {uploadingField === 'logoImage' ? <Loader2 className="w-4 h-4 animate-spin"/> : <Upload className="w-4 h-4" />}
+                              {uploadingField === 'logoImage' ? 'Enviando...' : 'Fazer Upload da Logo'}
+                              <input type="file" className="hidden" accept="image/*" disabled={uploadingField !== null} onChange={(e) => handleImageUpload(e, 'logoImage')} />
                           </label>
-                          <p className="text-xs text-slate-500 mt-2">Recomendado: PNG transparente (max 2MB)</p>
+                          <p className="text-xs text-slate-500 mt-2">Recomendado: PNG transparente (max 5MB)</p>
                       </div>
                   </div>
                   <div className="mt-3">
@@ -292,11 +314,12 @@ const AdminDashboard: React.FC = () => {
                              <img src={localContent.heroImage} alt="Banner Preview" className="w-full h-full object-cover" />
                         </div>
                     )}
-                    <label className="cursor-pointer bg-slate-700 hover:bg-slate-600 text-white px-4 py-2 rounded inline-flex items-center gap-2 transition w-full justify-center">
-                        <Upload className="w-4 h-4" /> Alterar Imagem de Fundo
-                        <input type="file" className="hidden" accept="image/*" onChange={(e) => handleImageUpload(e, 'heroImage')} />
+                    <label className={`cursor-pointer bg-slate-700 hover:bg-slate-600 text-white px-4 py-2 rounded inline-flex items-center gap-2 transition w-full justify-center ${uploadingField === 'heroImage' ? 'opacity-50 cursor-wait' : ''}`}>
+                        {uploadingField === 'heroImage' ? <Loader2 className="w-4 h-4 animate-spin"/> : <Upload className="w-4 h-4" />}
+                        {uploadingField === 'heroImage' ? 'Enviando...' : 'Alterar Imagem de Fundo'}
+                        <input type="file" className="hidden" accept="image/*" disabled={uploadingField !== null} onChange={(e) => handleImageUpload(e, 'heroImage')} />
                     </label>
-                    <p className="text-xs text-slate-500">Recomendado: JPG alta qualidade (max 2MB)</p>
+                    <p className="text-xs text-slate-500">Recomendado: JPG alta qualidade (max 5MB)</p>
                   </div>
                 </div>
 
@@ -469,9 +492,10 @@ const AdminDashboard: React.FC = () => {
                               Nenhuma imagem definida
                           </div>
                       )}
-                      <label className="cursor-pointer bg-slate-700 hover:bg-slate-600 text-white px-4 py-2 rounded inline-flex items-center gap-2 transition w-full justify-center">
-                          <Upload className="w-4 h-4" /> Escolher Imagem (Max 2MB)
-                          <input type="file" className="hidden" accept="image/*" onChange={(e) => handleImageUpload(e, 'seoImage')} />
+                      <label className={`cursor-pointer bg-slate-700 hover:bg-slate-600 text-white px-4 py-2 rounded inline-flex items-center gap-2 transition w-full justify-center ${uploadingField === 'seoImage' ? 'opacity-50 cursor-wait' : ''}`}>
+                          {uploadingField === 'seoImage' ? <Loader2 className="w-4 h-4 animate-spin"/> : <Upload className="w-4 h-4" />}
+                          {uploadingField === 'seoImage' ? 'Enviando...' : 'Escolher Imagem (Max 5MB)'}
+                          <input type="file" className="hidden" accept="image/*" disabled={uploadingField !== null} onChange={(e) => handleImageUpload(e, 'seoImage')} />
                       </label>
                     </div>
                   </div>

@@ -1,3 +1,4 @@
+
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { AppContextType, Plan, Lead, SiteContent, AppView } from '../types';
 import { INITIAL_CONTENT, INITIAL_PLANS } from '../constants';
@@ -5,131 +6,166 @@ import { INITIAL_CONTENT, INITIAL_PLANS } from '../constants';
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  // Load initial state from localStorage if available, else use constants
-  const [content, setContent] = useState<SiteContent>(() => {
-    try {
-      const saved = localStorage.getItem('site_content');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        // Merge with INITIAL_CONTENT to ensure new fields (like enableReseller, instructions) exist
-        return { ...INITIAL_CONTENT, ...parsed };
-      }
-      return INITIAL_CONTENT;
-    } catch (e) {
-      console.error("Error parsing site_content", e);
-      return INITIAL_CONTENT;
-    }
-  });
-
-  const [plans, setPlans] = useState<Plan[]>(() => {
-    try {
-      const saved = localStorage.getItem('site_plans');
-      return saved && saved !== "undefined" ? JSON.parse(saved) : INITIAL_PLANS;
-    } catch (e) {
-      console.error("Error parsing site_plans", e);
-      return INITIAL_PLANS;
-    }
-  });
-
-  const [leads, setLeads] = useState<Lead[]>(() => {
-    try {
-      const saved = localStorage.getItem('site_leads');
-      return saved ? JSON.parse(saved) : [];
-    } catch (e) {
-      console.error("Error parsing site_leads", e);
-      return [];
-    }
-  });
-
+  // Initialize with Defaults
+  const [content, setContent] = useState<SiteContent>(INITIAL_CONTENT);
+  const [plans, setPlans] = useState<Plan[]>(INITIAL_PLANS);
+  const [leads, setLeads] = useState<Lead[]>([]);
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [currentView, setCurrentView] = useState<AppView>('landing');
+  const [isLoading, setIsLoading] = useState(true);
 
-  // Persistence effects
-  useEffect(() => { localStorage.setItem('site_content', JSON.stringify(content)); }, [content]);
-  useEffect(() => { localStorage.setItem('site_plans', JSON.stringify(plans)); }, [plans]);
-  useEffect(() => { localStorage.setItem('site_leads', JSON.stringify(leads)); }, [leads]);
+  // --- API INTERACTION ---
+
+  // Load Data from Server on Mount
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        const res = await fetch('/api/db');
+        if (res.ok) {
+          const data = await res.json();
+          
+          // Merge server data with defaults to ensure type safety
+          if (data.content && Object.keys(data.content).length > 0) {
+            setContent(prev => ({ ...prev, ...data.content }));
+          }
+          if (data.plans && data.plans.length > 0) {
+            setPlans(data.plans);
+          }
+          if (data.leads) {
+            setLeads(data.leads);
+          }
+        }
+      } catch (error) {
+        console.error("Failed to load data from server", error);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    fetchData();
+  }, []);
+
+  // Save Config (Content & Plans) to Server
+  const saveConfigToServer = async (newContent: SiteContent, newPlans: Plan[]) => {
+    try {
+      await fetch('/api/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: newContent, plans: newPlans })
+      });
+    } catch (error) {
+      console.error("Failed to save config", error);
+    }
+  };
 
   const login = () => setIsLoggedIn(true);
   const logout = () => setIsLoggedIn(false);
   const setView = (view: AppView) => setCurrentView(view);
 
   const updateContent = (newContent: Partial<SiteContent>) => {
-    setContent(prev => ({ ...prev, ...newContent }));
+    setContent(prev => {
+      const updated = { ...prev, ...newContent };
+      saveConfigToServer(updated, plans); // Sync
+      return updated;
+    });
   };
 
   const updatePlan = (id: string, updatedPlan: Partial<Plan>) => {
-    setPlans(prev => prev.map(p => p.id === id ? { ...p, ...updatedPlan } : p));
+    setPlans(prev => {
+      const updated = prev.map(p => p.id === id ? { ...p, ...updatedPlan } : p);
+      saveConfigToServer(content, updated); // Sync
+      return updated;
+    });
   };
 
   const addPlan = (plan: Plan) => {
-    setPlans(prev => [...prev, plan]);
+    setPlans(prev => {
+      const updated = [...prev, plan];
+      saveConfigToServer(content, updated); // Sync
+      return updated;
+    });
   };
 
   const deletePlan = (id: string) => {
-    setPlans(prev => prev.filter(p => p.id !== id));
+    setPlans(prev => {
+      const updated = prev.filter(p => p.id !== id);
+      saveConfigToServer(content, updated); // Sync
+      return updated;
+    });
   };
 
-  // Helper to format phone to International Standard (specifically Brazil focus)
+  // Helper to format phone to International Standard
   const formatToInternational = (phone: string): string => {
-    // 1. Remove non-numeric characters
     let cleaned = phone.replace(/\D/g, '');
-
-    // 2. Logic for Brazilian numbers
-    // If length is 10 (Landline with DDD) or 11 (Mobile with DDD), assume it needs '55'
     if (cleaned.length >= 10 && cleaned.length <= 11) {
       cleaned = '55' + cleaned;
     }
-    
-    // If it's already 12 or 13 (has 55), keep it.
-    // Ideally, we return the clean numeric string. 
     return cleaned;
   };
 
+  // Leads are handled differently (concurrent-safe-ish backend push)
   const addLead = (leadData: Omit<Lead, 'id' | 'date'>) => {
-    // Format the incoming number immediately
     const formattedWhatsapp = formatToInternational(leadData.whatsapp);
-
-    // Check for duplicates using the formatted number
+    
+    // Optimistic check
     const exists = leads.some(l => formatToInternational(l.whatsapp) === formattedWhatsapp);
+    if (exists) return false;
 
-    if (exists) {
-      return false;
-    }
-
-    const newLead: Lead = {
+    const newLeadStub: Lead = {
       ...leadData,
-      whatsapp: formattedWhatsapp, // Save the formatted version
+      whatsapp: formattedWhatsapp,
       id: Math.random().toString(36).substr(2, 9),
       date: new Date().toISOString(),
     };
-    setLeads(prev => [newLead, ...prev]);
+
+    // Update Local immediately for UI feedback
+    setLeads(prev => [newLeadStub, ...prev]);
+
+    // Send to server
+    fetch('/api/leads', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newLeadStub)
+    }).catch(err => console.error("Error saving lead", err));
+
     return true;
   };
 
   const updateLead = (id: string, data: Partial<Lead>) => {
     let formattedWhatsapp = undefined;
-
-    // If updating whatsapp, format and check duplicates
     if (data.whatsapp) {
       formattedWhatsapp = formatToInternational(data.whatsapp);
-      
       const exists = leads.some(l => l.id !== id && formatToInternational(l.whatsapp) === formattedWhatsapp);
-      if (exists) {
-        return false;
-      }
+      if (exists) return false;
     }
 
-    setLeads(prev => prev.map(l => l.id === id ? { 
-      ...l, 
-      ...data, 
-      whatsapp: formattedWhatsapp || l.whatsapp // Use new formatted number if present, else keep old
-    } : l));
+    const updatedData = { ...data };
+    if (formattedWhatsapp) updatedData.whatsapp = formattedWhatsapp;
+
+    setLeads(prev => prev.map(l => l.id === id ? { ...l, ...updatedData } : l));
+
+    fetch('/api/leads/update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, action: 'update', data: updatedData })
+    }).catch(err => console.error("Error updating lead", err));
+
     return true;
   };
 
   const deleteLead = (id: string) => {
     setLeads(prev => prev.filter(l => l.id !== id));
+    
+    fetch('/api/leads/update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, action: 'delete' })
+    }).catch(err => console.error("Error deleting lead", err));
   };
+
+  if (isLoading) {
+      // Optional: Return a loader component or just null
+      return <div className="min-h-screen bg-slate-900 flex items-center justify-center text-white">Carregando...</div>;
+  }
 
   return (
     <AppContext.Provider value={{
