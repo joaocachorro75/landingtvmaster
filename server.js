@@ -11,23 +11,39 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = process.env.PORT || 80;
 
+// --- MULTI-SITE ISOLATION LOGIC ---
+// If APP_NAME env var is set (e.g., 'site1'), data is stored in /data/site1/
+// This prevents conflict when multiple apps share the same volume.
+const APP_NAME = process.env.APP_NAME || ''; 
+
 // Configuração de Pastas
-const DATA_DIR = path.join(__dirname, 'data');
+const BASE_DATA_DIR = path.join(__dirname, 'data');
+const DATA_DIR = path.join(BASE_DATA_DIR, APP_NAME); // /app/data/site1 OR /app/data/
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
 const DB_FILE = path.join(DATA_DIR, 'db.json');
 
 // Ensure directories exist
+// We create Base first, then the App specific folder
+if (!fs.existsSync(BASE_DATA_DIR)) {
+  try { fs.mkdirSync(BASE_DATA_DIR, { recursive: true }); } catch(e) {}
+}
 if (!fs.existsSync(DATA_DIR)) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
+  try { fs.mkdirSync(DATA_DIR, { recursive: true }); } catch(e) {
+    console.error(`FATAL: Could not create data directory at ${DATA_DIR}`, e);
+    process.exit(1); // Force restart if we can't write
+  }
 }
 if (!fs.existsSync(UPLOADS_DIR)) {
-  fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+  try { fs.mkdirSync(UPLOADS_DIR, { recursive: true }); } catch(e) {}
 }
 
 // Middleware
 app.use(express.json({ limit: '50mb' })); // Limit for JSON data
 app.use(express.static(path.join(__dirname, 'dist')));
-// Serve uploaded images statically
+
+// Serve uploaded images statically. 
+// Note: We mount it to /uploads regardless of the internal folder structure
+// so the frontend code (which expects /uploads/xyz.jpg) doesn't break.
 app.use('/uploads', express.static(UPLOADS_DIR));
 
 // --- Multer Configuration (File Uploads) ---
@@ -60,7 +76,7 @@ const readDb = () => {
     if (!data.trim()) return getDefaults(); // Handle empty file
     return JSON.parse(data);
   } catch (err) {
-    console.error("CRITICAL: Error reading DB. File might be corrupted.", err);
+    console.error(`CRITICAL: Error reading DB at ${DB_FILE}.`, err);
     // Backup corrupted file for manual inspection
     try {
         fs.copyFileSync(DB_FILE, `${DB_FILE}.corrupted.${Date.now()}`);
@@ -73,12 +89,11 @@ const readDb = () => {
 const writeDb = (data) => {
   try {
     // Atomic Write: Write to temp file first, then rename.
-    // This prevents data loss if the server crashes during write.
     const tempFile = `${DB_FILE}.tmp`;
     fs.writeFileSync(tempFile, JSON.stringify(data, null, 2));
     fs.renameSync(tempFile, DB_FILE);
   } catch (err) {
-    console.error("Error writing to DB:", err);
+    console.error(`Error writing to DB at ${DB_FILE}:`, err);
   }
 };
 
@@ -86,7 +101,13 @@ const writeDb = (data) => {
 
 // Health Check for EasyPanel/Docker
 app.get('/health', (req, res) => {
-  res.status(200).send('OK');
+  // Check if we can write to disk (essential for this app)
+  try {
+      fs.accessSync(DATA_DIR, fs.constants.W_OK);
+      res.status(200).send('OK');
+  } catch (err) {
+      res.status(500).send('Storage Error');
+  }
 });
 
 // Upload Endpoint
@@ -174,6 +195,7 @@ app.get('*', (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
+  console.log(`Using App Name: "${APP_NAME}"`);
   console.log(`Database file located at: ${DB_FILE}`);
   console.log(`Uploads directory located at: ${UPLOADS_DIR}`);
 });
