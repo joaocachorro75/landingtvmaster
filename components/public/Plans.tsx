@@ -106,7 +106,7 @@ const Plans: React.FC = () => {
                     <p className="text-sm text-slate-300 mb-2 font-semibold">Instruções:</p>
                     <ol className="text-xs text-slate-400 text-left list-decimal pl-8 space-y-1 mb-4">
                         <li>Abra o aplicativo do seu banco.</li>
-                        <li>Escolha a opção <strong>PIX</strong> > <strong>Ler QR Code</strong>.</li>
+                        <li>Escolha a opção <strong>PIX</strong> &gt; <strong>Ler QR Code</strong>.</li>
                         <li>Aponte a câmera ou use a opção "PIX Copia e Cola" abaixo.</li>
                         <li>Confira o valor e confirme o pagamento.</li>
                         <li>Envie o comprovante no WhatsApp abaixo.</li>
