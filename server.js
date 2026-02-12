@@ -48,25 +48,46 @@ const upload = multer({
   limits: { fileSize: 5 * 1024 * 1024 } // 5MB limit per file
 });
 
-// --- Database Helper ---
+// --- Database Helper (Stabilized) ---
+const getDefaults = () => ({ leads: [], plans: [], content: {} });
+
 const readDb = () => {
   if (!fs.existsSync(DB_FILE)) {
-    return { leads: [], plans: [], content: {} };
+    return getDefaults();
   }
   try {
     const data = fs.readFileSync(DB_FILE, 'utf8');
+    if (!data.trim()) return getDefaults(); // Handle empty file
     return JSON.parse(data);
   } catch (err) {
-    console.error("Error reading DB:", err);
-    return { leads: [], plans: [], content: {} };
+    console.error("CRITICAL: Error reading DB. File might be corrupted.", err);
+    // Backup corrupted file for manual inspection
+    try {
+        fs.copyFileSync(DB_FILE, `${DB_FILE}.corrupted.${Date.now()}`);
+    } catch (e) { console.error("Could not backup corrupted DB"); }
+    
+    return getDefaults(); // Return defaults to keep server alive
   }
 };
 
 const writeDb = (data) => {
-  fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2));
+  try {
+    // Atomic Write: Write to temp file first, then rename.
+    // This prevents data loss if the server crashes during write.
+    const tempFile = `${DB_FILE}.tmp`;
+    fs.writeFileSync(tempFile, JSON.stringify(data, null, 2));
+    fs.renameSync(tempFile, DB_FILE);
+  } catch (err) {
+    console.error("Error writing to DB:", err);
+  }
 };
 
 // --- API Routes ---
+
+// Health Check for EasyPanel/Docker
+app.get('/health', (req, res) => {
+  res.status(200).send('OK');
+});
 
 // Upload Endpoint
 app.post('/api/upload', upload.single('file'), (req, res) => {
@@ -86,49 +107,64 @@ app.get('/api/db', (req, res) => {
 
 // Update Configuration (Content & Plans)
 app.post('/api/config', (req, res) => {
-  const { content, plans } = req.body;
-  const db = readDb();
-  
-  if (content) db.content = content;
-  if (plans) db.plans = plans;
-  
-  writeDb(db);
-  res.json({ success: true });
+  try {
+      const { content, plans } = req.body;
+      const db = readDb();
+      
+      if (content) db.content = content;
+      if (plans) db.plans = plans;
+      
+      writeDb(db);
+      res.json({ success: true });
+  } catch (error) {
+      console.error("Error updating config:", error);
+      res.status(500).json({ success: false, message: "Internal Server Error" });
+  }
 });
 
 // Add Lead
 app.post('/api/leads', (req, res) => {
-  const newLead = req.body;
-  const db = readDb();
-  
-  // Initialize leads array if it doesn't exist
-  if (!db.leads) db.leads = [];
+  try {
+      const newLead = req.body;
+      const db = readDb();
+      
+      // Initialize leads array if it doesn't exist
+      if (!db.leads) db.leads = [];
 
-  // Check duplicate
-  const exists = db.leads.some(l => l.whatsapp === newLead.whatsapp);
-  if (exists) {
-    return res.status(400).json({ success: false, message: 'Duplicate' });
+      // Check duplicate
+      const exists = db.leads.some(l => l.whatsapp === newLead.whatsapp);
+      if (exists) {
+        return res.status(400).json({ success: false, message: 'Duplicate' });
+      }
+
+      db.leads.unshift(newLead); // Add to top
+      writeDb(db);
+      res.json({ success: true, lead: newLead });
+  } catch (error) {
+      console.error("Error adding lead:", error);
+      res.status(500).json({ success: false, message: "Internal Server Error" });
   }
-
-  db.leads.unshift(newLead); // Add to top
-  writeDb(db);
-  res.json({ success: true, lead: newLead });
 });
 
 // Update/Delete Lead
 app.post('/api/leads/update', (req, res) => {
-    const { id, action, data } = req.body; // action: 'update' or 'delete'
-    const db = readDb();
-    if (!db.leads) db.leads = [];
+    try {
+        const { id, action, data } = req.body; // action: 'update' or 'delete'
+        const db = readDb();
+        if (!db.leads) db.leads = [];
 
-    if (action === 'delete') {
-        db.leads = db.leads.filter(l => l.id !== id);
-    } else if (action === 'update') {
-        db.leads = db.leads.map(l => l.id === id ? { ...l, ...data } : l);
+        if (action === 'delete') {
+            db.leads = db.leads.filter(l => l.id !== id);
+        } else if (action === 'update') {
+            db.leads = db.leads.map(l => l.id === id ? { ...l, ...data } : l);
+        }
+
+        writeDb(db);
+        res.json({ success: true });
+    } catch (error) {
+        console.error("Error updating lead:", error);
+        res.status(500).json({ success: false, message: "Internal Server Error" });
     }
-
-    writeDb(db);
-    res.json({ success: true });
 });
 
 // --- Catch All -> Serve React App ---
