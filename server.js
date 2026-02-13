@@ -145,9 +145,9 @@ app.post('/api/leads/update', (req, res) => {
     }
 });
 
-// --- FIX: Wildcard catch-all for SPA ---
-// Using '/*' instead of '*' to avoid PathError in newer Express/path-to-regexp versions
-app.get('/*', (req, res) => {
+// --- FINAL FIX FOR PathError ---
+// Usando RegExp em vez de String resolve o conflito de sintaxe do "wildcard" em qualquer versão do Express.
+app.get(/.*/, (req, res) => {
   res.sendFile(path.join(__dirname, 'dist', 'index.html'));
 });
 
