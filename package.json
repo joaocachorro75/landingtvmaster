@@ -9,14 +9,15 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "express": "^5.2.1",
+    "fs": "^0.0.1-security",
+    "lucide-react": "^0.294.0",
+    "multer": "^2.0.2",
+    "mysql2": "^3.18.2",
+    "path": "^0.12.7",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
-    "lucide-react": "^0.294.0",
-    "express": "^5.2.1",
-    "path": "^0.12.7",
-    "fs": "^0.0.1-security",
-    "url": "^0.11.4",
-    "multer": "^2.0.2"
+    "url": "^0.11.4"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",
