@@ -558,6 +558,189 @@ app.post('/api/saas/webhook/checkout', async (req, res) => {
   }
 });
 
+// ============================================
+// SISTEMA DE LEMBRETES AUTOMÁTICOS
+// ============================================
+
+// Verificar vencimentos e enviar lembretes
+async function verificarVencimentos() {
+  console.log('🔍 Verificando vencimentos...');
+  
+  try {
+    const hoje = new Date();
+    hoje.setHours(0, 0, 0, 0);
+    
+    // --- 3 DIAS ANTES DO VENCIMENTO ---
+    const tresDiasDepois = new Date(hoje);
+    tresDiasDepois.setDate(tresDiasDepois.getDate() + 3);
+    
+    const [pagamentos3Dias] = await pool.execute(`
+      SELECT p.*, c.name, c.whatsapp, c.plan
+      FROM revendas_payments p
+      JOIN revendas_clients c ON p.client_id = c.id
+      WHERE p.status = 'pending'
+        AND DATE(p.due_date) = ?
+        AND c.status != 'suspended'
+    `, [tresDiasDepois.toISOString().split('T')[0]]);
+    
+    for (const pagamento of pagamentos3Dias) {
+      const mensagem = `⚠️ *Lembrete de Vencimento*
+
+Olá ${pagamento.name}!
+
+Sua assinatura do Revendas vence em *3 dias*!
+
+📅 *Data:* ${new Date(pagamento.due_date).toLocaleDateString('pt-BR')}
+💰 *Valor:* R$ ${pagamento.amount.toFixed(2)}
+
+Para evitar suspensão do serviço, realize o pagamento até a data.
+
+_Precisa de ajuda? Responda esta mensagem!_`;
+      
+      await sendWhatsAppMessage(pagamento.whatsapp, mensagem);
+      console.log(`📞 Lembrete 3 dias enviado para ${pagamento.whatsapp}`);
+    }
+    
+    // --- NO DIA DO VENCIMENTO ---
+    const [pagamentosHoje] = await pool.execute(`
+      SELECT p.*, c.name, c.whatsapp, c.plan
+      FROM revendas_payments p
+      JOIN revendas_clients c ON p.client_id = c.id
+      WHERE p.status = 'pending'
+        AND DATE(p.due_date) = ?
+        AND c.status != 'suspended'
+    `, [hoje.toISOString().split('T')[0]]);
+    
+    for (const pagamento of pagamentosHoje) {
+      const mensagem = `🚨 *Vencimento HOJE!*
+
+Olá ${pagamento.name}!
+
+Sua assinatura do Revendas vence *HOJE*!
+
+💰 *Valor:* R$ ${pagamento.amount.toFixed(2)}
+
+Realize o pagamento hoje para evitar suspensão do serviço.
+
+_Responda esta mensagem se precisar de ajuda!_`;
+      
+      await sendWhatsAppMessage(pagamento.whatsapp, mensagem);
+      console.log(`📞 Lembrete dia vencimento enviado para ${pagamento.whatsapp}`);
+    }
+    
+    // --- 3 DIAS APÓS VENCIMENTO (SUSPENSÃO) ---
+    const tresDiasAtras = new Date(hoje);
+    tresDiasAtras.setDate(tresDiasAtras.getDate() - 3);
+    
+    const [pagamentosAtrasados] = await pool.execute(`
+      SELECT p.*, c.name, c.whatsapp, c.plan
+      FROM revendas_payments p
+      JOIN revendas_clients c ON p.client_id = c.id
+      WHERE p.status = 'pending'
+        AND DATE(p.due_date) = ?
+        AND c.status != 'suspended'
+    `, [tresDiasAtras.toISOString().split('T')[0]]);
+    
+    for (const pagamento of pagamentosAtrasados) {
+      // Suspender instância
+      await pool.execute(
+        'UPDATE revendas_clients SET status = ? WHERE id = ?',
+        ['suspended', pagamento.client_id]
+      );
+      
+      await pool.execute(
+        'UPDATE revendas_instances SET status = ? WHERE client_id = ?',
+        ['suspended', pagamento.client_id]
+      );
+      
+      const mensagem = `⛔ *Serviço Suspenso*
+
+Olá ${pagamento.name}!
+
+Sua assinatura do Revendas foi *suspensa* por falta de pagamento.
+
+Para reativar seu serviço:
+1️⃣ Realize o pagamento de R$ ${pagamento.amount.toFixed(2)}
+2️⃣ Envie o comprovante nesta conversa
+
+_Seu site está temporariamente indisponível._`;
+      
+      await sendWhatsAppMessage(pagamento.whatsapp, mensagem);
+      console.log(`⛔ Cliente ${pagamento.whatsapp} suspenso`);
+    }
+    
+    console.log(`✅ Verificação concluída: ${pagamentos3Dias.length} lembretes 3 dias, ${pagamentosHoje.length} lembretes dia, ${pagamentosAtrasados.length} suspensões`);
+    
+  } catch (error) {
+    console.error('❌ Erro ao verificar vencimentos:', error);
+  }
+}
+
+// Executar verificação a cada hora (verifica se é hora de rodar)
+const ULTIMA_VERIFICACAO_FILE = '/tmp/revendas_ultima_verificacao.txt';
+let verificarInterval;
+
+function iniciarSistemaLembretes() {
+  // Verificar a cada 1 hora
+  verificarInterval = setInterval(async () => {
+    const agora = new Date();
+    const hora = agora.getHours();
+    
+    // Só executa entre 9h e 18h (horário comercial)
+    if (hora >= 9 && hora < 18) {
+      // Verificar se já rodou hoje
+      let ultimaVerificacao = null;
+      try {
+        if (fs.existsSync(ULTIMA_VERIFICACAO_FILE)) {
+          ultimaVerificacao = fs.readFileSync(ULTIMA_VERIFICACAO_FILE, 'utf8');
+        }
+      } catch (e) {}
+      
+      const hojeStr = agora.toISOString().split('T')[0];
+      
+      if (ultimaVerificacao !== hojeStr) {
+        await verificarVencimentos();
+        fs.writeFileSync(ULTIMA_VERIFICACAO_FILE, hojeStr);
+      }
+    }
+  }, 60 * 60 * 1000); // 1 hora
+  
+  // Executar imediatamente ao iniciar (após 5 segundos)
+  setTimeout(async () => {
+    const agora = new Date();
+    const hojeStr = agora.toISOString().split('T')[0];
+    
+    // Só executa se ainda não rodou hoje
+    let ultimaVerificacao = null;
+    try {
+      if (fs.existsSync(ULTIMA_VERIFICACAO_FILE)) {
+        ultimaVerificacao = fs.readFileSync(ULTIMA_VERIFICACAO_FILE, 'utf8');
+      }
+    } catch (e) {}
+    
+    if (ultimaVerificacao !== hojeStr) {
+      await verificarVencimentos();
+      fs.writeFileSync(ULTIMA_VERIFICACAO_FILE, hojeStr);
+    }
+  }, 5000);
+  
+  console.log('⏰ Sistema de lembretes automáticos iniciado');
+}
+
+// ============================================
+// ROTA MANUAL PARA DISPARAR LEMBRETES (ADMIN)
+// ============================================
+
+app.post('/api/saas/admin/verificar-vencimentos', async (req, res) => {
+  try {
+    await verificarVencimentos();
+    res.json({ success: true, message: 'Verificação de vencimentos executada!' });
+  } catch (error) {
+    console.error('Erro ao executar verificação:', error);
+    res.status(500).json({ success: false, message: 'Erro ao executar verificação' });
+  }
+});
+
 // --- FINAL FIX FOR PathError ---
 app.get(/.*/, (req, res) => {
   res.sendFile(path.join(__dirname, 'dist', 'index.html'));
@@ -566,4 +749,7 @@ app.get(/.*/, (req, res) => {
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
   console.log(`📊 SaaS Revendas API ativa`);
+  
+  // Iniciar sistema de lembretes
+  iniciarSistemaLembretes();
 });
