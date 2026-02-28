@@ -14,8 +14,8 @@ const PORT = process.env.PORT || 80;
 // --- MULTI-SITE ISOLATION LOGIC ---
 const APP_NAME = process.env.APP_NAME || ''; 
 
-// Configuração de Pastas
-const BASE_DATA_DIR = path.join(__dirname, 'data');
+// Configuração de Pastas (usando /data para volume persistente)
+const BASE_DATA_DIR = process.env.DATA_DIR || '/data';
 const DATA_DIR = path.join(BASE_DATA_DIR, APP_NAME); 
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
 const DB_FILE = path.join(DATA_DIR, 'db.json');

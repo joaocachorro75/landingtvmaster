@@ -39,8 +39,8 @@ RUN npm install --production
 # Copiar o frontend compilado
 COPY --from=build /app/dist ./dist
 
-# Criar diretório de dados e uploads
-RUN mkdir -p /app/data/uploads
+# Criar diretório de dados e uploads (para volume persistente)
+RUN mkdir -p /data/uploads
 
 EXPOSE 80
 
