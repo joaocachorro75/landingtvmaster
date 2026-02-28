@@ -143,6 +143,39 @@ async function createFuncionarioIA(name, whatsapp) {
 }
 
 // ============================================
+// SISTEMA DE COBRANÇA RECORRENTE - PIX
+// ============================================
+
+const PRECOS_PLANOS = {
+  parceiro: 0,
+  basico: 9.90,
+  premium: 99.00
+};
+
+// Gerar código PIX (simplificado - em produção usar API do banco)
+function generatePixCode(amount, clientName, txId) {
+  const pixKey = 'revendas@to-ligado.com';
+  const amountStr = amount.toFixed(2);
+  
+  // Payload PIX EMV-QRPS (simplificado)
+  const merchantName = clientName.substring(0, 25).toUpperCase().replace(/[^A-Z ]/g, '');
+  const payload = `00020126580014BR.GOV.BCB.PIX0136${pixKey}520400005303986540${amountStr}5802BR5925${merchantName.padEnd(25, ' ').substring(0, 25)}6009SAO PAULO62070503***6304`;
+  
+  return payload;
+}
+
+// Gerar QR Code URL
+function generateQrCodeUrl(pixCode) {
+  return `https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(pixCode)}`;
+}
+
+// Verificar status do pagamento PIX (simulado - em produção usar API do banco)
+async function checkPixPaymentStatus(txId) {
+  // Por enquanto retorna false - em produção integrar com gateway
+  return { paid: false };
+}
+
+// ============================================
 // ROTAS ORIGINAIS (Landing Page Individual)
 // ============================================
 
@@ -555,6 +588,383 @@ app.post('/api/saas/webhook/checkout', async (req, res) => {
   } catch (error) {
     console.error('Erro no webhook:', error);
     res.status(500).json({ success: false, message: 'Erro no webhook' });
+  }
+});
+
+// ============================================
+// ENDPOINTS DE ASSINATURA RECORRENTE
+// ============================================
+
+// POST /api/subscription/create - Criar assinatura com PIX
+app.post('/api/subscription/create', async (req, res) => {
+  const connection = await pool.getConnection();
+  try {
+    const { client_id, plan } = req.body;
+    
+    if (!client_id || !plan) {
+      return res.status(400).json({ success: false, message: 'client_id e plan são obrigatórios' });
+    }
+    
+    if (!['parceiro', 'basico', 'premium'].includes(plan)) {
+      return res.status(400).json({ success: false, message: 'Plano inválido. Use: parceiro, basico ou premium' });
+    }
+    
+    // Buscar cliente
+    const [clients] = await connection.execute(
+      'SELECT * FROM revendas_clients WHERE id = ?',
+      [client_id]
+    );
+    
+    if (clients.length === 0) {
+      return res.status(404).json({ success: false, message: 'Cliente não encontrado' });
+    }
+    
+    const client = clients[0];
+    const amount = PRECOS_PLANOS[plan];
+    
+    // Plano parceiro é gratuito
+    if (plan === 'parceiro' || amount === 0) {
+      await connection.beginTransaction();
+      
+      // Criar assinatura ativa
+      const startDate = new Date();
+      const endDate = new Date();
+      endDate.setFullYear(endDate.getFullYear() + 100); // "Vitalício"
+      
+      const [subResult] = await connection.execute(
+        `INSERT INTO revendas_subscriptions (client_id, plan, status, start_date, end_date)
+         VALUES (?, ?, 'active', ?, ?)`,
+        [client_id, plan, startDate, endDate]
+      );
+      
+      // Atualizar cliente
+      await connection.execute(
+        `UPDATE revendas_clients SET plan = ?, status = 'active', subscription_ends_at = ? WHERE id = ?`,
+        [plan, endDate, client_id]
+      );
+      
+      await connection.commit();
+      
+      return res.json({
+        success: true,
+        subscription_id: subResult.insertId,
+        plan,
+        status: 'active',
+        amount: 0,
+        message: 'Plano Parceiro ativado com sucesso!'
+      });
+    }
+    
+    await connection.beginTransaction();
+    
+    // Cancelar assinaturas anteriores pendentes
+    await connection.execute(
+      `UPDATE revendas_subscriptions SET status = 'cancelled' WHERE client_id = ? AND status = 'pending'`,
+      [client_id]
+    );
+    
+    // Criar nova assinatura pendente
+    const startDate = new Date();
+    const endDate = new Date();
+    endDate.setMonth(endDate.getMonth() + 1);
+    
+    const [subResult] = await connection.execute(
+      `INSERT INTO revendas_subscriptions (client_id, plan, status, start_date, end_date)
+       VALUES (?, ?, 'pending', ?, ?)`,
+      [client_id, plan, startDate, endDate]
+    );
+    
+    const subscriptionId = subResult.insertId;
+    
+    // Gerar PIX
+    const txId = `REV${Date.now()}${client_id}`;
+    const pixCode = generatePixCode(amount, client.name, txId);
+    const qrCodeUrl = generateQrCodeUrl(pixCode);
+    
+    // Criar pagamento
+    const [paymentResult] = await connection.execute(
+      `INSERT INTO revendas_payments (client_id, subscription_id, amount, plan, status, pix_code, pix_qr_code, due_date)
+       VALUES (?, ?, ?, ?, 'pending', ?, ?, DATE_ADD(NOW(), INTERVAL 1 HOUR))`,
+      [client_id, subscriptionId, amount, plan, pixCode, qrCodeUrl]
+    );
+    
+    // Atualizar assinatura com último pagamento
+    await connection.execute(
+      `UPDATE revendas_subscriptions SET last_payment_id = ? WHERE id = ?`,
+      [paymentResult.insertId, subscriptionId]
+    );
+    
+    await connection.commit();
+    
+    res.json({
+      success: true,
+      subscription_id: subscriptionId,
+      payment_id: paymentResult.insertId,
+      plan,
+      amount,
+      pix_code: pixCode,
+      qr_code: qrCodeUrl,
+      due_date: endDate.toISOString(),
+      message: 'Assinatura criada! Realize o pagamento via PIX.'
+    });
+    
+  } catch (error) {
+    await connection.rollback();
+    console.error('Erro ao criar assinatura:', error);
+    res.status(500).json({ success: false, message: 'Erro ao criar assinatura' });
+  } finally {
+    connection.release();
+  }
+});
+
+// GET /api/subscription/status/:clientId - Status da assinatura
+app.get('/api/subscription/status/:clientId', async (req, res) => {
+  try {
+    const clientId = req.params.clientId;
+    
+    // Buscar assinatura ativa ou pendente mais recente
+    const [subscriptions] = await pool.execute(`
+      SELECT s.*, p.status as payment_status, p.amount, p.paid_at
+      FROM revendas_subscriptions s
+      LEFT JOIN revendas_payments p ON s.last_payment_id = p.id
+      WHERE s.client_id = ? AND s.status IN ('active', 'pending')
+      ORDER BY s.created_at DESC
+      LIMIT 1
+    `, [clientId]);
+    
+    if (subscriptions.length === 0) {
+      return res.json({
+        success: true,
+        has_subscription: false,
+        message: 'Nenhuma assinatura encontrada'
+      });
+    }
+    
+    const sub = subscriptions[0];
+    
+    // Calcular dias restantes
+    const today = new Date();
+    const endDate = new Date(sub.end_date);
+    const daysLeft = Math.ceil((endDate - today) / (1000 * 60 * 60 * 24));
+    
+    // Buscar cliente
+    const [clients] = await pool.execute(
+      'SELECT name, whatsapp, plan, status, subscription_ends_at FROM revendas_clients WHERE id = ?',
+      [clientId]
+    );
+    
+    const client = clients[0] || {};
+    
+    res.json({
+      success: true,
+      has_subscription: true,
+      subscription: {
+        id: sub.id,
+        plan: sub.plan,
+        status: sub.status,
+        start_date: sub.start_date,
+        end_date: sub.end_date,
+        days_left: Math.max(0, daysLeft),
+        amount: sub.amount || PRECOS_PLANOS[sub.plan]
+      },
+      client: {
+        name: client.name,
+        whatsapp: client.whatsapp,
+        status: client.status
+      }
+    });
+    
+  } catch (error) {
+    console.error('Erro ao buscar status:', error);
+    res.status(500).json({ success: false, message: 'Erro ao buscar status da assinatura' });
+  }
+});
+
+// POST /api/subscription/webhook - Webhook de pagamento PIX
+app.post('/api/subscription/webhook', async (req, res) => {
+  const connection = await pool.getConnection();
+  try {
+    const { payment_id, status, tx_id } = req.body;
+    
+    console.log('📨 Webhook de pagamento recebido:', { payment_id, status, tx_id });
+    
+    if (status !== 'paid' && status !== 'confirmed') {
+      return res.json({ success: true, message: 'Status ignorado' });
+    }
+    
+    await connection.beginTransaction();
+    
+    // Buscar pagamento
+    const [payments] = await connection.execute(`
+      SELECT p.*, c.name, c.whatsapp, s.plan
+      FROM revendas_payments p
+      JOIN revendas_clients c ON p.client_id = c.id
+      LEFT JOIN revendas_subscriptions s ON p.subscription_id = s.id
+      WHERE p.id = ? AND p.status = 'pending'
+    `, [payment_id]);
+    
+    if (payments.length === 0) {
+      await connection.rollback();
+      return res.json({ success: true, message: 'Pagamento não encontrado ou já processado' });
+    }
+    
+    const payment = payments[0];
+    
+    // Atualizar pagamento
+    await connection.execute(
+      'UPDATE revendas_payments SET status = ?, paid_at = NOW() WHERE id = ?',
+      ['paid', payment_id]
+    );
+    
+    // Ativar assinatura
+    const startDate = new Date();
+    const endDate = new Date();
+    endDate.setMonth(endDate.getMonth() + 1);
+    
+    await connection.execute(
+      `UPDATE revendas_subscriptions SET status = 'active', start_date = ?, end_date = ? WHERE id = ?`,
+      [startDate, endDate, payment.subscription_id]
+    );
+    
+    // Atualizar cliente
+    await connection.execute(
+      `UPDATE revendas_clients SET status = 'active', plan = ?, subscription_ends_at = ? WHERE id = ?`,
+      [payment.plan, endDate, payment.client_id]
+    );
+    
+    // Criar próximo pagamento (renovação automática)
+    await connection.execute(
+      `INSERT INTO revendas_payments (client_id, subscription_id, amount, plan, status, due_date)
+       VALUES (?, ?, ?, ?, 'pending', ?)`,
+      [payment.client_id, payment.subscription_id, payment.amount, payment.plan, endDate]
+    );
+    
+    // Criar funcionário IA se premium
+    if (payment.plan === 'premium') {
+      await createFuncionarioIA(payment.name, payment.whatsapp);
+    }
+    
+    await connection.commit();
+    
+    // Enviar confirmação WhatsApp
+    const message = `✅ *Pagamento Confirmado!*
+
+Olá ${payment.name}!
+
+Sua assinatura do Revendas foi ativada com sucesso!
+
+📋 *Plano:* ${payment.plan === 'premium' ? 'Premium' : 'Básico'}
+💰 *Valor:* R$ ${parseFloat(payment.amount).toFixed(2)}
+📅 *Próximo vencimento:* ${endDate.toLocaleDateString('pt-BR')}
+${payment.plan === 'premium' ? '\n🤖 Seu Funcionário IA está sendo configurado!' : ''}
+
+Obrigado por escolher o Revendas!`;
+    
+    await sendWhatsAppMessage(payment.whatsapp, message);
+    
+    console.log(`✅ Pagamento ${payment_id} confirmado para cliente ${payment.client_id}`);
+    
+    res.json({ success: true, message: 'Pagamento processado com sucesso' });
+    
+  } catch (error) {
+    await connection.rollback();
+    console.error('Erro no webhook:', error);
+    res.status(500).json({ success: false, message: 'Erro ao processar webhook' });
+  } finally {
+    connection.release();
+  }
+});
+
+// POST /api/subscription/cancel - Cancelar assinatura
+app.post('/api/subscription/cancel', async (req, res) => {
+  const connection = await pool.getConnection();
+  try {
+    const { client_id, reason } = req.body;
+    
+    if (!client_id) {
+      return res.status(400).json({ success: false, message: 'client_id é obrigatório' });
+    }
+    
+    await connection.beginTransaction();
+    
+    // Cancelar assinaturas
+    await connection.execute(
+      `UPDATE revendas_subscriptions SET status = 'cancelled' WHERE client_id = ? AND status IN ('active', 'pending')`,
+      [client_id]
+    );
+    
+    // Atualizar cliente
+    await connection.execute(
+      `UPDATE revendas_clients SET status = 'cancelled' WHERE id = ?`,
+      [client_id]
+    );
+    
+    // Buscar cliente para enviar mensagem
+    const [clients] = await connection.execute(
+      'SELECT name, whatsapp FROM revendas_clients WHERE id = ?',
+      [client_id]
+    );
+    
+    await connection.commit();
+    
+    if (clients.length > 0) {
+      const client = clients[0];
+      const message = `😔 *Assinatura Cancelada*
+
+Olá ${client.name}!
+
+Sua assinatura foi cancelada conforme solicitado.
+${reason ? `\nMotivo: ${reason}` : ''}
+
+Você ainda pode acessar o serviço até o final do período pago.
+
+Esperamos ver você de volta em breve! 🙏`;
+      
+      await sendWhatsAppMessage(client.whatsapp, message);
+    }
+    
+    res.json({ success: true, message: 'Assinatura cancelada com sucesso' });
+    
+  } catch (error) {
+    await connection.rollback();
+    console.error('Erro ao cancelar:', error);
+    res.status(500).json({ success: false, message: 'Erro ao cancelar assinatura' });
+  } finally {
+    connection.release();
+  }
+});
+
+// GET /api/subscription/payment/:paymentId - Verificar status do pagamento
+app.get('/api/subscription/payment/:paymentId', async (req, res) => {
+  try {
+    const [payments] = await pool.execute(
+      'SELECT * FROM revendas_payments WHERE id = ?',
+      [req.params.paymentId]
+    );
+    
+    if (payments.length === 0) {
+      return res.status(404).json({ success: false, message: 'Pagamento não encontrado' });
+    }
+    
+    const payment = payments[0];
+    
+    res.json({
+      success: true,
+      payment: {
+        id: payment.id,
+        amount: payment.amount,
+        plan: payment.plan,
+        status: payment.status,
+        pix_code: payment.pix_code,
+        qr_code: payment.pix_qr_code,
+        due_date: payment.due_date,
+        paid_at: payment.paid_at
+      }
+    });
+    
+  } catch (error) {
+    console.error('Erro ao buscar pagamento:', error);
+    res.status(500).json({ success: false, message: 'Erro ao buscar pagamento' });
   }
 });
 
