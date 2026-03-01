@@ -7,12 +7,21 @@ import LeadCapture from './components/public/LeadCapture';
 import FloatingWhatsApp from './components/public/FloatingWhatsApp';
 import AdminLogin from './components/admin/AdminLogin';
 import AdminDashboard from './components/admin/AdminDashboard';
+import SaasLanding from './components/saas/SaasLanding';
+import SaasCheckout from './components/saas/SaasCheckout';
 import { Menu, X, Globe } from 'lucide-react';
 import { THEME_CONFIG } from './constants';
+
+// Detecta se é a landing do SaaS principal
+const IS_SAAS_LANDING = import.meta.env.VITE_SAAS_LANDING === 'true' || 
+                         window.location.hostname.includes('revendastvsaas') ||
+                         window.location.hostname === 'revendas.to-ligado.com';
 
 const AppContent: React.FC = () => {
   const { isLoggedIn, content, currentView, setView } = useAppContext();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [saasView, setSaasView] = useState<'landing' | 'checkout' | 'login'>('landing');
+  const [selectedSaasPlan, setSelectedSaasPlan] = useState<'basico' | 'premium'>('basico');
   
   const theme = THEME_CONFIG[content.theme || 'blue'];
 
@@ -63,6 +72,43 @@ const AppContent: React.FC = () => {
 
   if (currentView === 'admin') {
     return isLoggedIn ? <AdminDashboard /> : <AdminLogin />;
+  }
+
+  // --- SAAS LANDING (Revendas TV SaaS) ---
+  if (IS_SAAS_LANDING) {
+    const handleSaasCheckout = (plan: 'basico' | 'premium') => {
+      setSelectedSaasPlan(plan);
+      setSaasView('checkout');
+    };
+
+    const handleSaasLogin = () => {
+      setSaasView('login');
+    };
+
+    if (saasView === 'checkout') {
+      return (
+        <SaasCheckout 
+          plan={selectedSaasPlan}
+          onBack={() => setSaasView('landing')}
+          onComplete={(data) => {
+            console.log('Checkout completed:', data);
+            // TODO: Integrar com API de pagamento
+            setSaasView('landing');
+          }}
+        />
+      );
+    }
+
+    if (saasView === 'login') {
+      return isLoggedIn ? <AdminDashboard /> : <AdminLogin />;
+    }
+
+    return (
+      <SaasLanding 
+        onCheckout={handleSaasCheckout}
+        onLogin={handleSaasLogin}
+      />
+    );
   }
 
   return (
