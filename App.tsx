@@ -7,15 +7,23 @@ import LeadCapture from './components/public/LeadCapture';
 import FloatingWhatsApp from './components/public/FloatingWhatsApp';
 import AdminLogin from './components/admin/AdminLogin';
 import AdminDashboard from './components/admin/AdminDashboard';
+import SuperAdminLogin from './components/superadmin/SuperAdminLogin';
+import SuperAdminDashboard from './components/superadmin/SuperAdminDashboard';
 import SaasLanding from './components/saas/SaasLanding';
 import SaasCheckout from './components/saas/SaasCheckout';
 import { Menu, X, Globe } from 'lucide-react';
 import { THEME_CONFIG } from './constants';
 
-// Detecta se é a landing do SaaS principal
-const IS_SAAS_LANDING = import.meta.env.VITE_SAAS_LANDING === 'true' || 
+// Detecta se é área do SuperAdmin (deve vir ANTES do IS_SAAS_LANDING)
+const IS_SUPERADMIN = window.location.pathname.startsWith('/superadmin') ||
+                       window.location.hostname === 'admin.to-ligado.com' ||
+                       window.location.hostname === 'superadmin.to-ligado.com';
+
+// Detecta se é a landing do SaaS principal (mas NÃO se for superadmin)
+const IS_SAAS_LANDING = !IS_SUPERADMIN && (
+                         import.meta.env.VITE_SAAS_LANDING === 'true' || 
                          window.location.hostname.includes('revendastvsaas') ||
-                         window.location.hostname === 'revendas.to-ligado.com';
+                         window.location.hostname === 'revendas.to-ligado.com');
 
 const AppContent: React.FC = () => {
   const { isLoggedIn, content, currentView, setView } = useAppContext();
@@ -23,7 +31,46 @@ const AppContent: React.FC = () => {
   const [saasView, setSaasView] = useState<'landing' | 'checkout' | 'login'>('landing');
   const [selectedSaasPlan, setSelectedSaasPlan] = useState<'basico' | 'premium'>('basico');
   
+  // SuperAdmin state
+  const [superAdminLoggedIn, setSuperAdminLoggedIn] = useState(false);
+  const [superAdminLoading, setSuperAdminLoading] = useState(true);
+  
   const theme = THEME_CONFIG[content.theme || 'blue'];
+
+  // Verificar token do SuperAdmin ao carregar
+  useEffect(() => {
+    if (IS_SUPERADMIN) {
+      const token = localStorage.getItem('superadmin_token');
+      if (token) {
+        fetch('/api/superadmin/verify', {
+          headers: { 'Authorization': `Bearer ${token}` }
+        })
+          .then(res => res.json())
+          .then(data => {
+            if (data.valid) {
+              setSuperAdminLoggedIn(true);
+            } else {
+              localStorage.removeItem('superadmin_token');
+            }
+          })
+          .catch(() => {
+            localStorage.removeItem('superadmin_token');
+          })
+          .finally(() => setSuperAdminLoading(false));
+      } else {
+        setSuperAdminLoading(false);
+      }
+    }
+  }, []);
+
+  const handleSuperAdminLogin = () => {
+    setSuperAdminLoggedIn(true);
+  };
+
+  const handleSuperAdminLogout = () => {
+    localStorage.removeItem('superadmin_token');
+    setSuperAdminLoggedIn(false);
+  };
 
   // --- SEO DYNAMIC UPDATES ---
   useEffect(() => {
@@ -72,6 +119,24 @@ const AppContent: React.FC = () => {
 
   if (currentView === 'admin') {
     return isLoggedIn ? <AdminDashboard /> : <AdminLogin />;
+  }
+
+  // --- SUPER ADMIN AREA ---
+  if (IS_SUPERADMIN) {
+    if (superAdminLoading) {
+      return (
+        <div className="min-h-screen bg-slate-900 flex items-center justify-center text-white">
+          <div className="text-center">
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-violet-500 mx-auto mb-4"></div>
+            <p>Verificando autenticação...</p>
+          </div>
+        </div>
+      );
+    }
+    
+    return superAdminLoggedIn 
+      ? <SuperAdminDashboard onLogout={handleSuperAdminLogout} />
+      : <SuperAdminLogin onLogin={handleSuperAdminLogin} />;
   }
 
   // --- SAAS LANDING (Revendas TV SaaS) ---

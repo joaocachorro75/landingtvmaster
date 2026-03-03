@@ -1151,6 +1151,237 @@ app.post('/api/saas/admin/verificar-vencimentos', async (req, res) => {
   }
 });
 
+// ============================================
+// SUPER ADMIN AUTHENTICATION
+// ============================================
+
+const SUPER_ADMIN_EMAIL = process.env.SUPER_ADMIN_EMAIL || 'admin@to-ligado.com';
+const SUPER_ADMIN_PASSWORD = process.env.SUPER_ADMIN_PASSWORD || 'admin123';
+const JWT_SECRET = process.env.JWT_SECRET || 'super_admin_secret_2026';
+
+// Simple token generation (em produção usar biblioteca JWT)
+function generateToken(email) {
+  const timestamp = Date.now();
+  const data = `${email}:${timestamp}:${JWT_SECRET}`;
+  const token = Buffer.from(data).toString('base64');
+  return token;
+}
+
+function verifyToken(token) {
+  try {
+    const decoded = Buffer.from(token, 'base64').toString();
+    const [email, timestamp, secret] = decoded.split(':');
+    if (secret !== JWT_SECRET) return null;
+    // Token válido por 24 horas
+    const age = Date.now() - parseInt(timestamp);
+    if (age > 24 * 60 * 60 * 1000) return null;
+    return email;
+  } catch {
+    return null;
+  }
+}
+
+// Middleware de autenticação SuperAdmin
+function requireSuperAdmin(req, res, next) {
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  if (!token) {
+    return res.status(401).json({ error: 'Token não fornecido' });
+  }
+  
+  const email = verifyToken(token);
+  if (!email) {
+    return res.status(401).json({ error: 'Token inválido ou expirado' });
+  }
+  
+  req.superAdminEmail = email;
+  next();
+}
+
+// Login do SuperAdmin
+app.post('/api/superadmin/login', async (req, res) => {
+  const { email, password } = req.body;
+  
+  if (email === SUPER_ADMIN_EMAIL && password === SUPER_ADMIN_PASSWORD) {
+    const token = generateToken(email);
+    res.json({ 
+      success: true, 
+      token,
+      email 
+    });
+  } else {
+    res.status(401).json({ error: 'Credenciais inválidas' });
+  }
+});
+
+// Verificar token
+app.get('/api/superadmin/verify', requireSuperAdmin, (req, res) => {
+  res.json({ valid: true, email: req.superAdminEmail });
+});
+
+// Logout (invalidar no cliente)
+app.post('/api/superadmin/logout', (req, res) => {
+  res.json({ success: true });
+});
+
+// ============================================
+// SUPER ADMIN CLIENTS MANAGEMENT
+// ============================================
+
+// Listar todos os clientes (com detalhes)
+app.get('/api/superadmin/clients', requireSuperAdmin, async (req, res) => {
+  try {
+    const [clients] = await pool.query(`
+      SELECT 
+        c.id,
+        c.name,
+        c.whatsapp,
+        c.email,
+        c.plan,
+        c.status,
+        c.created_at,
+        c.expires_at,
+        i.name as instance_name,
+        i.subdomain
+      FROM clients c
+      LEFT JOIN instances i ON c.id = i.client_id
+      ORDER BY c.created_at DESC
+    `);
+    res.json(clients);
+  } catch (error) {
+    console.error('Erro ao buscar clientes:', error);
+    res.status(500).json({ error: 'Erro ao buscar clientes' });
+  }
+});
+
+// Ativar cliente
+app.post('/api/superadmin/clients/:id/activate', requireSuperAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    await pool.query('UPDATE clients SET status = ? WHERE id = ?', ['active', id]);
+    res.json({ success: true, message: 'Cliente ativado' });
+  } catch (error) {
+    console.error('Erro ao ativar cliente:', error);
+    res.status(500).json({ error: 'Erro ao ativar cliente' });
+  }
+});
+
+// Desativar cliente
+app.post('/api/superadmin/clients/:id/deactivate', requireSuperAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    await pool.query('UPDATE clients SET status = ? WHERE id = ?', ['inactive', id]);
+    res.json({ success: true, message: 'Cliente desativado' });
+  } catch (error) {
+    console.error('Erro ao desativar cliente:', error);
+    res.status(500).json({ error: 'Erro ao desativar cliente' });
+  }
+});
+
+// Excluir cliente
+app.delete('/api/superadmin/clients/:id', requireSuperAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    // Excluir instância primeiro
+    await pool.query('DELETE FROM instances WHERE client_id = ?', [id]);
+    // Excluir cliente
+    await pool.query('DELETE FROM clients WHERE id = ?', [id]);
+    res.json({ success: true, message: 'Cliente excluído' });
+  } catch (error) {
+    console.error('Erro ao excluir cliente:', error);
+    res.status(500).json({ error: 'Erro ao excluir cliente' });
+  }
+});
+
+// ============================================
+// SUPER ADMIN PAYMENTS MANAGEMENT
+// ============================================
+
+// Listar todos os pagamentos
+app.get('/api/superadmin/payments', requireSuperAdmin, async (req, res) => {
+  try {
+    const [payments] = await pool.query(`
+      SELECT 
+        p.id,
+        p.client_id,
+        c.name as client_name,
+        p.amount,
+        p.status,
+        p.due_date,
+        p.paid_at,
+        p.plan,
+        p.created_at
+      FROM payments p
+      JOIN clients c ON p.client_id = c.id
+      ORDER BY p.created_at DESC
+    `);
+    res.json(payments);
+  } catch (error) {
+    console.error('Erro ao buscar pagamentos:', error);
+    res.status(500).json({ error: 'Erro ao buscar pagamentos' });
+  }
+});
+
+// Marcar pagamento como pago
+app.post('/api/superadmin/payments/:id/pay', requireSuperAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    await pool.query('UPDATE payments SET status = ?, paid_at = NOW() WHERE id = ?', ['paid', id]);
+    res.json({ success: true, message: 'Pagamento marcado como pago' });
+  } catch (error) {
+    console.error('Erro ao atualizar pagamento:', error);
+    res.status(500).json({ error: 'Erro ao atualizar pagamento' });
+  }
+});
+
+// ============================================
+// SUPER ADMIN STATS
+// ============================================
+
+app.get('/api/superadmin/stats', requireSuperAdmin, async (req, res) => {
+  try {
+    // Total de clientes
+    const [totalResult] = await pool.query('SELECT COUNT(*) as count FROM clients');
+    const totalClients = totalResult[0].count;
+    
+    // Clientes ativos
+    const [activeResult] = await pool.query('SELECT COUNT(*) as count FROM clients WHERE status = ?', ['active']);
+    const activeClients = activeResult[0].count;
+    
+    // Receita mensal (pagamentos do mês atual)
+    const [revenueResult] = await pool.query(`
+      SELECT COALESCE(SUM(amount), 0) as total 
+      FROM payments 
+      WHERE status = 'paid' 
+      AND MONTH(paid_at) = MONTH(CURRENT_DATE())
+      AND YEAR(paid_at) = YEAR(CURRENT_DATE())
+    `);
+    const monthlyRevenue = revenueResult[0].total;
+    
+    // Pagamentos pendentes
+    const [pendingResult] = await pool.query('SELECT COUNT(*) as count FROM payments WHERE status = ?', ['pending']);
+    const pendingPayments = pendingResult[0].count;
+    
+    // Novos clientes este mês
+    const [newResult] = await pool.query(`
+      SELECT COUNT(*) as count FROM clients 
+      WHERE MONTH(created_at) = MONTH(CURRENT_DATE())
+      AND YEAR(created_at) = YEAR(CURRENT_DATE())
+    `);
+    const newClientsThisMonth = newResult[0].count;
+    
+    res.json({
+      totalClients,
+      activeClients,
+      monthlyRevenue,
+      pendingPayments,
+      newClientsThisMonth
+    });
+  } catch (error) {
+    console.error('Erro ao buscar estatísticas:', error);
+    res.status(500).json({ error: 'Erro ao buscar estatísticas' });
+  }
+});
+
 // --- FINAL FIX FOR PathError ---
 app.get(/.*/, (req, res) => {
   res.sendFile(path.join(__dirname, 'dist', 'index.html'));
