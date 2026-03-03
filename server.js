@@ -1239,11 +1239,8 @@ app.get('/api/superadmin/clients', requireSuperAdmin, async (req, res) => {
         c.plan,
         c.status,
         c.created_at,
-        c.expires_at,
-        i.name as instance_name,
-        i.subdomain
+        c.expires_at
       FROM revendas_clients c
-      LEFT JOIN revendas_instances i ON c.id = i.client_id
       ORDER BY c.created_at DESC
     `);
     res.json(clients);
