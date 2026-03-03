@@ -1242,8 +1242,8 @@ app.get('/api/superadmin/clients', requireSuperAdmin, async (req, res) => {
         c.expires_at,
         i.name as instance_name,
         i.subdomain
-      FROM clients c
-      LEFT JOIN instances i ON c.id = i.client_id
+      FROM revendas_clients c
+      LEFT JOIN revendas_instances i ON c.id = i.client_id
       ORDER BY c.created_at DESC
     `);
     res.json(clients);
@@ -1257,7 +1257,7 @@ app.get('/api/superadmin/clients', requireSuperAdmin, async (req, res) => {
 app.post('/api/superadmin/clients/:id/activate', requireSuperAdmin, async (req, res) => {
   try {
     const { id } = req.params;
-    await pool.query('UPDATE clients SET status = ? WHERE id = ?', ['active', id]);
+    await pool.query('UPDATE revendas_clients SET status = ? WHERE id = ?', ['active', id]);
     res.json({ success: true, message: 'Cliente ativado' });
   } catch (error) {
     console.error('Erro ao ativar cliente:', error);
@@ -1269,7 +1269,7 @@ app.post('/api/superadmin/clients/:id/activate', requireSuperAdmin, async (req, 
 app.post('/api/superadmin/clients/:id/deactivate', requireSuperAdmin, async (req, res) => {
   try {
     const { id } = req.params;
-    await pool.query('UPDATE clients SET status = ? WHERE id = ?', ['inactive', id]);
+    await pool.query('UPDATE revendas_clients SET status = ? WHERE id = ?', ['inactive', id]);
     res.json({ success: true, message: 'Cliente desativado' });
   } catch (error) {
     console.error('Erro ao desativar cliente:', error);
@@ -1282,9 +1282,11 @@ app.delete('/api/superadmin/clients/:id', requireSuperAdmin, async (req, res) =>
   try {
     const { id } = req.params;
     // Excluir instância primeiro
-    await pool.query('DELETE FROM instances WHERE client_id = ?', [id]);
+    await pool.query('DELETE FROM revendas_instances WHERE client_id = ?', [id]);
+    // Excluir pagamentos
+    await pool.query('DELETE FROM revendas_payments WHERE client_id = ?', [id]);
     // Excluir cliente
-    await pool.query('DELETE FROM clients WHERE id = ?', [id]);
+    await pool.query('DELETE FROM revendas_clients WHERE id = ?', [id]);
     res.json({ success: true, message: 'Cliente excluído' });
   } catch (error) {
     console.error('Erro ao excluir cliente:', error);
@@ -1310,8 +1312,8 @@ app.get('/api/superadmin/payments', requireSuperAdmin, async (req, res) => {
         p.paid_at,
         p.plan,
         p.created_at
-      FROM payments p
-      JOIN clients c ON p.client_id = c.id
+      FROM revendas_payments p
+      JOIN revendas_clients c ON p.client_id = c.id
       ORDER BY p.created_at DESC
     `);
     res.json(payments);
@@ -1325,7 +1327,7 @@ app.get('/api/superadmin/payments', requireSuperAdmin, async (req, res) => {
 app.post('/api/superadmin/payments/:id/pay', requireSuperAdmin, async (req, res) => {
   try {
     const { id } = req.params;
-    await pool.query('UPDATE payments SET status = ?, paid_at = NOW() WHERE id = ?', ['paid', id]);
+    await pool.query('UPDATE revendas_payments SET status = ?, paid_at = NOW() WHERE id = ?', ['paid', id]);
     res.json({ success: true, message: 'Pagamento marcado como pago' });
   } catch (error) {
     console.error('Erro ao atualizar pagamento:', error);
@@ -1340,17 +1342,17 @@ app.post('/api/superadmin/payments/:id/pay', requireSuperAdmin, async (req, res)
 app.get('/api/superadmin/stats', requireSuperAdmin, async (req, res) => {
   try {
     // Total de clientes
-    const [totalResult] = await pool.query('SELECT COUNT(*) as count FROM clients');
+    const [totalResult] = await pool.query('SELECT COUNT(*) as count FROM revendas_clients');
     const totalClients = totalResult[0].count;
     
     // Clientes ativos
-    const [activeResult] = await pool.query('SELECT COUNT(*) as count FROM clients WHERE status = ?', ['active']);
+    const [activeResult] = await pool.query('SELECT COUNT(*) as count FROM revendas_clients WHERE status = ?', ['active']);
     const activeClients = activeResult[0].count;
     
     // Receita mensal (pagamentos do mês atual)
     const [revenueResult] = await pool.query(`
       SELECT COALESCE(SUM(amount), 0) as total 
-      FROM payments 
+      FROM revendas_payments 
       WHERE status = 'paid' 
       AND MONTH(paid_at) = MONTH(CURRENT_DATE())
       AND YEAR(paid_at) = YEAR(CURRENT_DATE())
@@ -1358,12 +1360,12 @@ app.get('/api/superadmin/stats', requireSuperAdmin, async (req, res) => {
     const monthlyRevenue = revenueResult[0].total;
     
     // Pagamentos pendentes
-    const [pendingResult] = await pool.query('SELECT COUNT(*) as count FROM payments WHERE status = ?', ['pending']);
+    const [pendingResult] = await pool.query('SELECT COUNT(*) as count FROM revendas_payments WHERE status = ?', ['pending']);
     const pendingPayments = pendingResult[0].count;
     
     // Novos clientes este mês
     const [newResult] = await pool.query(`
-      SELECT COUNT(*) as count FROM clients 
+      SELECT COUNT(*) as count FROM revendas_clients 
       WHERE MONTH(created_at) = MONTH(CURRENT_DATE())
       AND YEAR(created_at) = YEAR(CURRENT_DATE())
     `);
