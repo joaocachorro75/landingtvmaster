@@ -56,8 +56,9 @@ const SuperAdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) =
       // Carregar clientes
       const clientsRes = await fetch('/api/saas/clients');
       if (clientsRes.ok) {
-        const clientsData = await clientsRes.json();
-        setClients(clientsData);
+        const data = await clientsRes.json();
+        const clientsData = data.clients || data || [];
+        setClients(Array.isArray(clientsData) ? clientsData : []);
         
         // Calcular stats
         const active = clientsData.filter((c: Client) => c.status === 'active').length;
@@ -78,8 +79,9 @@ const SuperAdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) =
       // Carregar pagamentos
       const paymentsRes = await fetch('/api/saas/payments');
       if (paymentsRes.ok) {
-        const paymentsData = await paymentsRes.json();
-        setPayments(paymentsData);
+        const data = await paymentsRes.json();
+        const paymentsData = data.payments || data || [];
+        setPayments(Array.isArray(paymentsData) ? paymentsData : []);
         
         const pending = paymentsData.filter((p: Payment) => p.status === 'pending').length;
         const revenue = paymentsData
