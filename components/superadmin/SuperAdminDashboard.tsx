@@ -33,8 +33,10 @@ interface Stats {
   newClientsThisMonth: number;
 }
 
+type Tab = 'overview' | 'clients' | 'payments' | 'plans' | 'config';
+
 const SuperAdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
-  const [activeTab, setActiveTab] = useState<'overview' | 'clients' | 'payments' | 'plans'>('overview');
+  const [activeTab, setActiveTab] = useState<Tab>('overview');
   const [clients, setClients] = useState<Client[]>([]);
   const [payments, setPayments] = useState<Payment[]>([]);
   const [stats, setStats] = useState<Stats>({
@@ -46,10 +48,61 @@ const SuperAdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) =
   });
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
+  
+  // Configuração PIX
+  const [pixConfig, setPixConfig] = useState({
+    key: 'revendas@to-ligado.com',
+    type: 'email',
+    merchantName: 'SITES REVENDAS'
+  });
+  const [savingConfig, setSavingConfig] = useState(false);
 
   useEffect(() => {
     loadData();
+    loadConfig();
   }, []);
+
+  const loadConfig = async () => {
+    try {
+      const token = localStorage.getItem('superadmin_token');
+      const res = await fetch('/api/superadmin/config', {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (res.ok) {
+        const config = await res.json();
+        if (config.pix) {
+          setPixConfig(config.pix);
+        }
+      }
+    } catch (error) {
+      console.error('Erro ao carregar configuração:', error);
+    }
+  };
+
+  const saveConfig = async () => {
+    setSavingConfig(true);
+    try {
+      const token = localStorage.getItem('superadmin_token');
+      const res = await fetch('/api/superadmin/config', {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ pix: pixConfig })
+      });
+      if (res.ok) {
+        alert('Configuração salva com sucesso!');
+      } else {
+        alert('Erro ao salvar configuração');
+      }
+    } catch (error) {
+      console.error('Erro ao salvar:', error);
+      alert('Erro ao salvar configuração');
+    } finally {
+      setSavingConfig(false);
+    }
+  };
 
   const loadData = async () => {
     try {
@@ -219,6 +272,12 @@ const SuperAdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) =
               className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition ${activeTab === 'plans' ? 'bg-violet-600 text-white' : 'text-slate-400 hover:bg-slate-700'}`}
             >
               <Settings className="w-5 h-5" /> Planos SaaS
+            </button>
+            <button 
+              onClick={() => setActiveTab('config')}
+              className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition ${activeTab === 'config' ? 'bg-violet-600 text-white' : 'text-slate-400 hover:bg-slate-700'}`}
+            >
+              <CreditCard className="w-5 h-5" /> Configurar PIX
             </button>
           </nav>
         </aside>
@@ -523,6 +582,88 @@ const SuperAdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) =
                   </ul>
                   <p className="text-xs text-slate-400">Para revendedores profissionais</p>
                 </div>
+              </div>
+            </div>
+          )}
+
+          {/* CONFIG TAB - PIX */}
+          {activeTab === 'config' && (
+            <div className="space-y-6 max-w-2xl">
+              <h2 className="text-2xl font-bold">Configuração de Pagamento</h2>
+              
+              <div className="bg-slate-800 p-6 rounded-xl border border-slate-700 space-y-6">
+                <div className="flex items-center gap-3 mb-4">
+                  <CreditCard className="w-6 h-6 text-green-400" />
+                  <h3 className="text-lg font-semibold">Chave PIX</h3>
+                </div>
+                
+                <div>
+                  <label className="block text-sm text-slate-400 mb-2">Tipo de Chave</label>
+                  <select
+                    value={pixConfig.type}
+                    onChange={(e) => setPixConfig({...pixConfig, type: e.target.value})}
+                    className="w-full bg-slate-900 border border-slate-600 rounded-lg px-4 py-3 text-white"
+                  >
+                    <option value="email">E-mail</option>
+                    <option value="cpf">CPF</option>
+                    <option value="cnpj">CNPJ</option>
+                    <option value="phone">Telefone</option>
+                    <option value="random">Chave Aleatória</option>
+                  </select>
+                </div>
+                
+                <div>
+                  <label className="block text-sm text-slate-400 mb-2">Chave PIX</label>
+                  <input
+                    type="text"
+                    value={pixConfig.key}
+                    onChange={(e) => setPixConfig({...pixConfig, key: e.target.value})}
+                    className="w-full bg-slate-900 border border-slate-600 rounded-lg px-4 py-3 text-white"
+                    placeholder="Ex: pagamentos@empresa.com"
+                  />
+                </div>
+                
+                <div>
+                  <label className="block text-sm text-slate-400 mb-2">Nome no QR Code</label>
+                  <input
+                    type="text"
+                    value={pixConfig.merchantName}
+                    onChange={(e) => setPixConfig({...pixConfig, merchantName: e.target.value})}
+                    className="w-full bg-slate-900 border border-slate-600 rounded-lg px-4 py-3 text-white"
+                    placeholder="Ex: MINHA EMPRESA"
+                    maxLength={25}
+                  />
+                  <p className="text-xs text-slate-500 mt-1">Máximo 25 caracteres, aparecerá no QR Code</p>
+                </div>
+                
+                <button
+                  onClick={saveConfig}
+                  disabled={savingConfig}
+                  className={`w-full py-3 rounded-lg font-bold flex items-center justify-center gap-2 transition ${savingConfig ? 'bg-slate-600' : 'bg-green-600 hover:bg-green-500'} text-white`}
+                >
+                  {savingConfig ? 'Salvando...' : 'Salvar Configuração'}
+                </button>
+              </div>
+              
+              <div className="bg-slate-800 p-6 rounded-xl border border-slate-700">
+                <h3 className="text-lg font-semibold mb-4">📤 Disparar Lembretes</h3>
+                <p className="text-sm text-slate-400 mb-4">
+                  Envia lembrete de pagamento por WhatsApp para todos os clientes com pagamentos pendentes.
+                </p>
+                <button
+                  onClick={async () => {
+                    const token = localStorage.getItem('superadmin_token');
+                    const res = await fetch('/api/superadmin/reminders/send-all', {
+                      method: 'POST',
+                      headers: { 'Authorization': `Bearer ${token}` }
+                    });
+                    const data = await res.json();
+                    alert(data.message || 'Lembretes enviados!');
+                  }}
+                  className="bg-yellow-600 hover:bg-yellow-500 text-white px-6 py-3 rounded-lg font-bold"
+                >
+                  Disparar Lembretes WhatsApp
+                </button>
               </div>
             </div>
           )}

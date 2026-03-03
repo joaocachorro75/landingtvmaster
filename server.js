@@ -166,13 +166,26 @@ const PRECOS_PLANOS = {
   premium: 99.00
 };
 
-// Gerar código PIX (simplificado - em produção usar API do banco)
+// Configuração PIX - pode ser alterada pelo SuperAdmin
+const getPixConfig = () => {
+  const db = readDb();
+  return db.saas_config?.pix || {
+    key: 'revendas@to-ligado.com',
+    type: 'email',
+    merchantName: 'SITES REVENDAS'
+  };
+};
+
+// Gerar código PIX (EMV-QRPS padrão Bacen)
 function generatePixCode(amount, clientName, txId) {
-  const pixKey = 'revendas@to-ligado.com';
+  const config = getPixConfig();
+  const pixKey = config.key;
   const amountStr = amount.toFixed(2);
   
-  // Payload PIX EMV-QRPS (simplificado)
-  const merchantName = clientName.substring(0, 25).toUpperCase().replace(/[^A-Z ]/g, '');
+  // Payload PIX EMV-QRPS
+  const merchantName = (config.merchantName || clientName).substring(0, 25).toUpperCase().replace(/[^A-Z ]/g, '');
+  
+  // Formato EMV-QRPS simplificado
   const payload = `00020126580014BR.GOV.BCB.PIX0136${pixKey}520400005303986540${amountStr}5802BR5925${merchantName.padEnd(25, ' ').substring(0, 25)}6009SAO PAULO62070503***6304`;
   
   return payload;
@@ -183,10 +196,93 @@ function generateQrCodeUrl(pixCode) {
   return `https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(pixCode)}`;
 }
 
-// Verificar status do pagamento PIX (simulado - em produção usar API do banco)
+// Verificar status do pagamento PIX (simulado - em produção integrar com gateway)
 async function checkPixPaymentStatus(txId) {
-  // Por enquanto retorna false - em produção integrar com gateway
   return { paid: false };
+}
+
+// ============================================
+// SISTEMA DE NOTIFICAÇÕES WHATSAPP
+// ============================================
+
+const EVOLUTION_API_URL = 'https://automacao-evolution-api.nfeujb.easypanel.host';
+const EVOLUTION_API_KEY = '5BE128D18942-4B09-8AF8-454ADEEB06B1';
+
+async function sendWhatsAppNotification(phone, message) {
+  try {
+    const response = await fetch(`${EVOLUTION_API_URL}/message/sendText/saasrevendas`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'apikey': EVOLUTION_API_KEY
+      },
+      body: JSON.stringify({
+        number: phone.replace(/\D/g, ''),
+        textMessage: { text: message }
+      })
+    });
+    return response.ok;
+  } catch (error) {
+    console.error('Erro ao enviar WhatsApp:', error);
+    return false;
+  }
+}
+
+// Lembrete de pagamento
+async function enviarLembretePagamento(client, payment) {
+  const mensagem = `💳 *Lembrete de Pagamento*
+
+Olá, ${client.name}!
+
+Você tem um pagamento pendente de *R$ ${payment.amount.toFixed(2)}* referente ao plano *${payment.plan}*.
+
+📅 Vencimento: ${new Date(payment.due_date).toLocaleDateString('pt-BR')}
+
+🔑 *Chave PIX:* ${getPixConfig().key}
+
+Ou copie o código:
+\`${payment.pix_code}\`
+
+Dúvidas? Responda esta mensagem!`;
+  
+  return await sendWhatsAppNotification(client.whatsapp, mensagem);
+}
+
+// Confirmação de pagamento
+async function confirmarPagamento(client, payment) {
+  const mensagem = `✅ *Pagamento Confirmado!*
+
+Olá, ${client.name}!
+
+Seu pagamento de *R$ ${payment.amount.toFixed(2)}* foi confirmado com sucesso!
+
+📋 Plano: ${payment.plan}
+📅 Próximo vencimento: ${new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toLocaleDateString('pt-BR')}
+
+Obrigado por escolher o *SaaS Sites para Revendas*! 🚀`;
+  
+  return await sendWhatsAppNotification(client.whatsapp, mensagem);
+}
+
+// Boas-vindas para novo cliente
+async function enviarBoasVindas(client) {
+  const mensagem = `🎉 *Bem-vindo ao SaaS Sites para Revendas!*
+
+Olá, ${client.name}!
+
+Sua conta foi criada com sucesso! 🎊
+
+📦 Plano: ${client.plan}
+🔐 Seu site: Em breve...
+
+*Próximos passos:*
+1️⃣ Aguarde a ativação
+2️⃣ Você receberá o link do seu site
+3️⃣ Configure seus produtos e preços
+
+Dúvidas? É só responder!`;
+  
+  return await sendWhatsAppNotification(client.whatsapp, mensagem);
 }
 
 // ============================================
@@ -1426,6 +1522,157 @@ app.get('/api/superadmin/stats', requireSuperAdmin, (req, res) => {
   } catch (error) {
     console.error('Erro ao buscar estatísticas:', error);
     res.status(500).json({ error: 'Erro ao buscar estatísticas' });
+  }
+});
+
+// ============================================
+// SUPER ADMIN CONFIGURAÇÕES
+// ============================================
+
+// Buscar configurações
+app.get('/api/superadmin/config', requireSuperAdmin, (req, res) => {
+  try {
+    const db = readDb();
+    res.json(db.saas_config || {
+      pix: {
+        key: 'revendas@to-ligado.com',
+        type: 'email',
+        merchantName: 'SITES REVENDAS'
+      },
+      whatsapp: {
+        notifications: true,
+        lembretes: true
+      }
+    });
+  } catch (error) {
+    console.error('Erro ao buscar configurações:', error);
+    res.status(500).json({ error: 'Erro ao buscar configurações' });
+  }
+});
+
+// Salvar configurações
+app.post('/api/superadmin/config', requireSuperAdmin, (req, res) => {
+  try {
+    const db = readDb();
+    db.saas_config = {
+      ...db.saas_config,
+      ...req.body
+    };
+    writeDb(db);
+    res.json({ success: true, message: 'Configurações salvas!' });
+  } catch (error) {
+    console.error('Erro ao salvar configurações:', error);
+    res.status(500).json({ error: 'Erro ao salvar configurações' });
+  }
+});
+
+// ============================================
+// CRIAR PAGAMENTO COM PIX
+// ============================================
+
+app.post('/api/superadmin/payments/create', requireSuperAdmin, (req, res) => {
+  try {
+    const db = readDb();
+    const { client_id } = req.body;
+    
+    const client = (db.saas_clients || []).find(c => c.id === client_id);
+    if (!client) {
+      return res.status(404).json({ error: 'Cliente não encontrado' });
+    }
+    
+    const amount = PRECOS_PLANOS[client.plan] || 9.90;
+    const pixCode = generatePixCode(amount, client.name, Date.now());
+    const qrCodeUrl = generateQrCodeUrl(pixCode);
+    
+    const newPayment = {
+      id: Date.now(),
+      client_id,
+      client_name: client.name,
+      amount,
+      plan: client.plan,
+      status: 'pending',
+      pix_code: pixCode,
+      pix_qr_code: qrCodeUrl,
+      due_date: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+      created_at: new Date().toISOString()
+    };
+    
+    db.saas_payments = db.saas_payments || [];
+    db.saas_payments.push(newPayment);
+    writeDb(db);
+    
+    res.json({ 
+      success: true, 
+      payment: newPayment,
+      pix: {
+        code: pixCode,
+        qrCode: qrCodeUrl
+      }
+    });
+  } catch (error) {
+    console.error('Erro ao criar pagamento:', error);
+    res.status(500).json({ error: 'Erro ao criar pagamento' });
+  }
+});
+
+// Enviar lembrete para cliente
+app.post('/api/superadmin/payments/:id/remind', requireSuperAdmin, async (req, res) => {
+  try {
+    const db = readDb();
+    const paymentId = parseInt(req.params.id);
+    
+    const payment = (db.saas_payments || []).find(p => p.id === paymentId);
+    if (!payment) {
+      return res.status(404).json({ error: 'Pagamento não encontrado' });
+    }
+    
+    const client = (db.saas_clients || []).find(c => c.id === payment.client_id);
+    if (!client) {
+      return res.status(404).json({ error: 'Cliente não encontrado' });
+    }
+    
+    const sent = await enviarLembretePagamento(client, payment);
+    
+    if (sent) {
+      res.json({ success: true, message: 'Lembrete enviado por WhatsApp!' });
+    } else {
+      res.status(500).json({ error: 'Erro ao enviar lembrete' });
+    }
+  } catch (error) {
+    console.error('Erro ao enviar lembrete:', error);
+    res.status(500).json({ error: 'Erro ao enviar lembrete' });
+  }
+});
+
+// Disparar lembretes para todos com pagamento pendente
+app.post('/api/superadmin/reminders/send-all', requireSuperAdmin, async (req, res) => {
+  try {
+    const db = readDb();
+    const payments = (db.saas_payments || []).filter(p => p.status === 'pending');
+    const clients = db.saas_clients || [];
+    
+    let sent = 0;
+    let failed = 0;
+    
+    for (const payment of payments) {
+      const client = clients.find(c => c.id === payment.client_id);
+      if (client && client.whatsapp) {
+        const ok = await enviarLembretePagamento(client, payment);
+        if (ok) sent++;
+        else failed++;
+        
+        // Aguardar 1 segundo entre envios para não sobrecarregar
+        await new Promise(r => setTimeout(r, 1000));
+      }
+    }
+    
+    res.json({ 
+      success: true, 
+      message: `Lembretes enviados: ${sent} sucesso, ${failed} falhas` 
+    });
+  } catch (error) {
+    console.error('Erro ao enviar lembretes:', error);
+    res.status(500).json({ error: 'Erro ao enviar lembretes' });
   }
 });
 
