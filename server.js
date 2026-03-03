@@ -13,10 +13,10 @@ const PORT = process.env.PORT || 80;
 
 // --- DATABASE CONFIG ---
 const DB_CONFIG = {
-  host: 'automacao_saasql',
-  user: 'toligado',
-  password: 'Naodigo2306@',
-  database: 'saasql',
+  host: process.env.DB_HOST || 'automacao_saasql',
+  user: process.env.DB_USER || 'toligado',
+  password: process.env.DB_PASSWORD || 'Naodigo2306@',
+  database: process.env.DB_NAME || 'saasql',
   waitForConnections: true,
   connectionLimit: 10
 };
@@ -68,7 +68,21 @@ const upload = multer({
 });
 
 // --- Database Helper (JSON) ---
-const getDefaults = () => ({ leads: [], plans: [], content: {} });
+const getDefaults = () => ({ 
+  leads: [], 
+  plans: [], 
+  content: {},
+  // Novo: dados do SaaS
+  saas_clients: [],
+  saas_payments: [],
+  saas_stats: {
+    totalClients: 0,
+    activeClients: 0,
+    monthlyRevenue: 0,
+    pendingPayments: 0,
+    newClientsThisMonth: 0
+  }
+});
 
 const readDb = () => {
   try {
@@ -1224,37 +1238,59 @@ app.post('/api/superadmin/logout', (req, res) => {
 });
 
 // ============================================
-// SUPER ADMIN CLIENTS MANAGEMENT
+// SUPER ADMIN CLIENTS MANAGEMENT (JSON)
 // ============================================
 
-// Listar todos os clientes (com detalhes)
-app.get('/api/superadmin/clients', requireSuperAdmin, async (req, res) => {
+// Listar todos os clientes
+app.get('/api/superadmin/clients', requireSuperAdmin, (req, res) => {
   try {
-    const [clients] = await pool.query(`
-      SELECT 
-        c.id,
-        c.name,
-        c.whatsapp,
-        c.email,
-        c.plan,
-        c.status,
-        c.created_at,
-        c.expires_at
-      FROM revendas_clients c
-      ORDER BY c.created_at DESC
-    `);
-    res.json(clients);
+    const db = readDb();
+    res.json(db.saas_clients || []);
   } catch (error) {
     console.error('Erro ao buscar clientes:', error);
     res.status(500).json({ error: 'Erro ao buscar clientes' });
   }
 });
 
-// Ativar cliente
-app.post('/api/superadmin/clients/:id/activate', requireSuperAdmin, async (req, res) => {
+// Adicionar cliente
+app.post('/api/superadmin/clients', requireSuperAdmin, (req, res) => {
   try {
-    const { id } = req.params;
-    await pool.query('UPDATE revendas_clients SET status = ? WHERE id = ?', ['active', id]);
+    const db = readDb();
+    const { name, whatsapp, email, plan, status } = req.body;
+    
+    const newClient = {
+      id: Date.now(),
+      name,
+      whatsapp,
+      email: email || '',
+      plan: plan || 'basico',
+      status: status || 'active',
+      created_at: new Date().toISOString(),
+      expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()
+    };
+    
+    db.saas_clients = db.saas_clients || [];
+    db.saas_clients.push(newClient);
+    writeDb(db);
+    
+    res.json({ success: true, client: newClient });
+  } catch (error) {
+    console.error('Erro ao criar cliente:', error);
+    res.status(500).json({ error: 'Erro ao criar cliente' });
+  }
+});
+
+// Ativar cliente
+app.post('/api/superadmin/clients/:id/activate', requireSuperAdmin, (req, res) => {
+  try {
+    const db = readDb();
+    const clientId = parseInt(req.params.id);
+    
+    db.saas_clients = (db.saas_clients || []).map(c => 
+      c.id === clientId ? { ...c, status: 'active' } : c
+    );
+    writeDb(db);
+    
     res.json({ success: true, message: 'Cliente ativado' });
   } catch (error) {
     console.error('Erro ao ativar cliente:', error);
@@ -1263,10 +1299,16 @@ app.post('/api/superadmin/clients/:id/activate', requireSuperAdmin, async (req, 
 });
 
 // Desativar cliente
-app.post('/api/superadmin/clients/:id/deactivate', requireSuperAdmin, async (req, res) => {
+app.post('/api/superadmin/clients/:id/deactivate', requireSuperAdmin, (req, res) => {
   try {
-    const { id } = req.params;
-    await pool.query('UPDATE revendas_clients SET status = ? WHERE id = ?', ['inactive', id]);
+    const db = readDb();
+    const clientId = parseInt(req.params.id);
+    
+    db.saas_clients = (db.saas_clients || []).map(c => 
+      c.id === clientId ? { ...c, status: 'inactive' } : c
+    );
+    writeDb(db);
+    
     res.json({ success: true, message: 'Cliente desativado' });
   } catch (error) {
     console.error('Erro ao desativar cliente:', error);
@@ -1275,15 +1317,14 @@ app.post('/api/superadmin/clients/:id/deactivate', requireSuperAdmin, async (req
 });
 
 // Excluir cliente
-app.delete('/api/superadmin/clients/:id', requireSuperAdmin, async (req, res) => {
+app.delete('/api/superadmin/clients/:id', requireSuperAdmin, (req, res) => {
   try {
-    const { id } = req.params;
-    // Excluir instância primeiro
-    await pool.query('DELETE FROM revendas_instances WHERE client_id = ?', [id]);
-    // Excluir pagamentos
-    await pool.query('DELETE FROM revendas_payments WHERE client_id = ?', [id]);
-    // Excluir cliente
-    await pool.query('DELETE FROM revendas_clients WHERE id = ?', [id]);
+    const db = readDb();
+    const clientId = parseInt(req.params.id);
+    
+    db.saas_clients = (db.saas_clients || []).filter(c => c.id !== clientId);
+    writeDb(db);
+    
     res.json({ success: true, message: 'Cliente excluído' });
   } catch (error) {
     console.error('Erro ao excluir cliente:', error);
@@ -1292,39 +1333,61 @@ app.delete('/api/superadmin/clients/:id', requireSuperAdmin, async (req, res) =>
 });
 
 // ============================================
-// SUPER ADMIN PAYMENTS MANAGEMENT
+// SUPER ADMIN PAYMENTS MANAGEMENT (JSON)
 // ============================================
 
 // Listar todos os pagamentos
-app.get('/api/superadmin/payments', requireSuperAdmin, async (req, res) => {
+app.get('/api/superadmin/payments', requireSuperAdmin, (req, res) => {
   try {
-    const [payments] = await pool.query(`
-      SELECT 
-        p.id,
-        p.client_id,
-        c.name as client_name,
-        p.amount,
-        p.status,
-        p.due_date,
-        p.paid_at,
-        p.plan,
-        p.created_at
-      FROM revendas_payments p
-      JOIN revendas_clients c ON p.client_id = c.id
-      ORDER BY p.created_at DESC
-    `);
-    res.json(payments);
+    const db = readDb();
+    res.json(db.saas_payments || []);
   } catch (error) {
     console.error('Erro ao buscar pagamentos:', error);
     res.status(500).json({ error: 'Erro ao buscar pagamentos' });
   }
 });
 
-// Marcar pagamento como pago
-app.post('/api/superadmin/payments/:id/pay', requireSuperAdmin, async (req, res) => {
+// Adicionar pagamento
+app.post('/api/superadmin/payments', requireSuperAdmin, (req, res) => {
   try {
-    const { id } = req.params;
-    await pool.query('UPDATE revendas_payments SET status = ?, paid_at = NOW() WHERE id = ?', ['paid', id]);
+    const db = readDb();
+    const { client_id, amount, plan, due_date } = req.body;
+    
+    const client = (db.saas_clients || []).find(c => c.id === client_id);
+    
+    const newPayment = {
+      id: Date.now(),
+      client_id,
+      client_name: client?.name || 'Cliente',
+      amount,
+      plan,
+      status: 'pending',
+      due_date: due_date || new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+      created_at: new Date().toISOString()
+    };
+    
+    db.saas_payments = db.saas_payments || [];
+    db.saas_payments.push(newPayment);
+    writeDb(db);
+    
+    res.json({ success: true, payment: newPayment });
+  } catch (error) {
+    console.error('Erro ao criar pagamento:', error);
+    res.status(500).json({ error: 'Erro ao criar pagamento' });
+  }
+});
+
+// Marcar pagamento como pago
+app.post('/api/superadmin/payments/:id/pay', requireSuperAdmin, (req, res) => {
+  try {
+    const db = readDb();
+    const paymentId = parseInt(req.params.id);
+    
+    db.saas_payments = (db.saas_payments || []).map(p => 
+      p.id === paymentId ? { ...p, status: 'paid', paid_at: new Date().toISOString() } : p
+    );
+    writeDb(db);
+    
     res.json({ success: true, message: 'Pagamento marcado como pago' });
   } catch (error) {
     console.error('Erro ao atualizar pagamento:', error);
@@ -1333,48 +1396,33 @@ app.post('/api/superadmin/payments/:id/pay', requireSuperAdmin, async (req, res)
 });
 
 // ============================================
-// SUPER ADMIN STATS
+// SUPER ADMIN STATS (JSON)
 // ============================================
 
-app.get('/api/superadmin/stats', requireSuperAdmin, async (req, res) => {
+app.get('/api/superadmin/stats', requireSuperAdmin, (req, res) => {
   try {
-    // Total de clientes
-    const [totalResult] = await pool.query('SELECT COUNT(*) as count FROM revendas_clients');
-    const totalClients = totalResult[0].count;
+    const db = readDb();
+    const clients = db.saas_clients || [];
+    const payments = db.saas_payments || [];
     
-    // Clientes ativos
-    const [activeResult] = await pool.query('SELECT COUNT(*) as count FROM revendas_clients WHERE status = ?', ['active']);
-    const activeClients = activeResult[0].count;
+    const now = new Date();
+    const thisMonth = now.getMonth();
+    const thisYear = now.getFullYear();
     
-    // Receita mensal (pagamentos do mês atual)
-    const [revenueResult] = await pool.query(`
-      SELECT COALESCE(SUM(amount), 0) as total 
-      FROM revendas_payments 
-      WHERE status = 'paid' 
-      AND MONTH(paid_at) = MONTH(CURRENT_DATE())
-      AND YEAR(paid_at) = YEAR(CURRENT_DATE())
-    `);
-    const monthlyRevenue = revenueResult[0].total;
+    const stats = {
+      totalClients: clients.length,
+      activeClients: clients.filter(c => c.status === 'active').length,
+      monthlyRevenue: payments
+        .filter(p => p.status === 'paid' && new Date(p.paid_at).getMonth() === thisMonth && new Date(p.paid_at).getFullYear() === thisYear)
+        .reduce((sum, p) => sum + p.amount, 0),
+      pendingPayments: payments.filter(p => p.status === 'pending').length,
+      newClientsThisMonth: clients.filter(c => {
+        const created = new Date(c.created_at);
+        return created.getMonth() === thisMonth && created.getFullYear() === thisYear;
+      }).length
+    };
     
-    // Pagamentos pendentes
-    const [pendingResult] = await pool.query('SELECT COUNT(*) as count FROM revendas_payments WHERE status = ?', ['pending']);
-    const pendingPayments = pendingResult[0].count;
-    
-    // Novos clientes este mês
-    const [newResult] = await pool.query(`
-      SELECT COUNT(*) as count FROM revendas_clients 
-      WHERE MONTH(created_at) = MONTH(CURRENT_DATE())
-      AND YEAR(created_at) = YEAR(CURRENT_DATE())
-    `);
-    const newClientsThisMonth = newResult[0].count;
-    
-    res.json({
-      totalClients,
-      activeClients,
-      monthlyRevenue,
-      pendingPayments,
-      newClientsThisMonth
-    });
+    res.json(stats);
   } catch (error) {
     console.error('Erro ao buscar estatísticas:', error);
     res.status(500).json({ error: 'Erro ao buscar estatísticas' });
