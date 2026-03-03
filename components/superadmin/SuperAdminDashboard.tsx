@@ -178,7 +178,7 @@ const SuperAdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) =
         <div className="flex items-center gap-3">
           <Globe className="w-6 h-6 text-violet-400" />
           <div>
-            <h1 className="text-xl font-bold text-violet-400">Super Admin - Revendas TV SaaS</h1>
+            <h1 className="text-xl font-bold text-violet-400">Super Admin - SaaS Sites para Revendas</h1>
             <p className="text-xs text-slate-400">Painel de gerenciamento do SaaS</p>
           </div>
         </div>

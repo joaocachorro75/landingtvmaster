@@ -48,7 +48,7 @@ const SuperAdminLogin: React.FC<SuperAdminLoginProps> = ({ onLogin }) => {
               <Globe className="w-8 h-8 text-white" />
             </div>
             <h1 className="text-2xl font-bold text-white">Super Admin</h1>
-            <p className="text-slate-400 text-sm mt-2">Revendas TV SaaS</p>
+            <p className="text-slate-400 text-sm mt-2">SaaS Sites para Revendas</p>
           </div>
 
           {/* Error Message */}
