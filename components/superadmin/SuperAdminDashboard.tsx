@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { LogOut, Users, CreditCard, TrendingUp, DollarSign, Calendar, CheckCircle, XCircle, Clock, Search, Download, Eye, Trash2, Settings, Globe } from 'lucide-react';
+import { LogOut, Users, CreditCard, TrendingUp, DollarSign, Calendar, CheckCircle, XCircle, Clock, Search, Download, Eye, Trash2, Settings, Globe, Plus, X } from 'lucide-react';
 
 interface Client {
   id: number;
@@ -56,6 +56,16 @@ const SuperAdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) =
     merchantName: 'SITES REVENDAS'
   });
   const [savingConfig, setSavingConfig] = useState(false);
+  
+  // Modal criar cliente
+  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [newClient, setNewClient] = useState({
+    name: '',
+    whatsapp: '',
+    email: '',
+    plan: 'basico' as 'parceiro' | 'basico' | 'premium'
+  });
+  const [creatingClient, setCreatingClient] = useState(false);
 
   useEffect(() => {
     loadData();
@@ -151,6 +161,40 @@ const SuperAdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) =
       console.error('Erro ao carregar dados:', error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleCreateClient = async () => {
+    if (!newClient.name || !newClient.whatsapp) {
+      alert('Preencha nome e WhatsApp!');
+      return;
+    }
+    
+    setCreatingClient(true);
+    try {
+      const token = localStorage.getItem('superadmin_token');
+      const res = await fetch('/api/superadmin/clients', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify(newClient)
+      });
+      
+      if (res.ok) {
+        alert('Cliente criado com sucesso!');
+        setShowCreateModal(false);
+        setNewClient({ name: '', whatsapp: '', email: '', plan: 'basico' });
+        loadData();
+      } else {
+        const data = await res.json();
+        alert(data.error || 'Erro ao criar cliente');
+      }
+    } catch (error) {
+      alert('Erro ao criar cliente');
+    } finally {
+      setCreatingClient(false);
     }
   };
 
@@ -363,10 +407,96 @@ const SuperAdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) =
             <div className="space-y-6">
               <div className="flex justify-between items-center">
                 <h2 className="text-2xl font-bold">Clientes</h2>
-                <button onClick={exportClientsCSV} className="bg-green-600 hover:bg-green-500 text-white px-4 py-2 rounded flex items-center gap-2">
-                  <Download className="w-4 h-4" /> Exportar CSV
-                </button>
+                <div className="flex gap-2">
+                  <button 
+                    onClick={() => setShowCreateModal(true)} 
+                    className="bg-violet-600 hover:bg-violet-500 text-white px-4 py-2 rounded flex items-center gap-2"
+                  >
+                    <Plus className="w-4 h-4" /> Novo Cliente
+                  </button>
+                  <button onClick={exportClientsCSV} className="bg-green-600 hover:bg-green-500 text-white px-4 py-2 rounded flex items-center gap-2">
+                    <Download className="w-4 h-4" /> Exportar CSV
+                  </button>
+                </div>
               </div>
+
+              {/* Modal Criar Cliente */}
+              {showCreateModal && (
+                <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+                  <div className="bg-slate-800 rounded-xl border border-slate-700 p-6 w-full max-w-md">
+                    <div className="flex justify-between items-center mb-4">
+                      <h3 className="text-xl font-bold">Novo Cliente</h3>
+                      <button onClick={() => setShowCreateModal(false)} className="text-slate-400 hover:text-white">
+                        <X className="w-5 h-5" />
+                      </button>
+                    </div>
+                    
+                    <div className="space-y-4">
+                      <div>
+                        <label className="block text-sm text-slate-400 mb-1">Nome *</label>
+                        <input
+                          type="text"
+                          value={newClient.name}
+                          onChange={(e) => setNewClient({...newClient, name: e.target.value})}
+                          className="w-full bg-slate-900 border border-slate-600 rounded-lg px-4 py-2 text-white"
+                          placeholder="Nome do cliente"
+                        />
+                      </div>
+                      
+                      <div>
+                        <label className="block text-sm text-slate-400 mb-1">WhatsApp *</label>
+                        <input
+                          type="text"
+                          value={newClient.whatsapp}
+                          onChange={(e) => setNewClient({...newClient, whatsapp: e.target.value})}
+                          className="w-full bg-slate-900 border border-slate-600 rounded-lg px-4 py-2 text-white"
+                          placeholder="5511999999999"
+                        />
+                      </div>
+                      
+                      <div>
+                        <label className="block text-sm text-slate-400 mb-1">E-mail</label>
+                        <input
+                          type="email"
+                          value={newClient.email}
+                          onChange={(e) => setNewClient({...newClient, email: e.target.value})}
+                          className="w-full bg-slate-900 border border-slate-600 rounded-lg px-4 py-2 text-white"
+                          placeholder="email@exemplo.com"
+                        />
+                      </div>
+                      
+                      <div>
+                        <label className="block text-sm text-slate-400 mb-1">Plano</label>
+                        <select
+                          value={newClient.plan}
+                          onChange={(e) => setNewClient({...newClient, plan: e.target.value as any})}
+                          className="w-full bg-slate-900 border border-slate-600 rounded-lg px-4 py-2 text-white"
+                        >
+                          <option value="parceiro">Parceiro (Grátis)</option>
+                          <option value="basico">Básico (R$ 9,90/mês)</option>
+                          <option value="premium">Premium (R$ 99/mês)</option>
+                        </select>
+                      </div>
+                    </div>
+                    
+                    <div className="flex gap-2 mt-6">
+                      <button
+                        onClick={() => setShowCreateModal(false)}
+                        className="flex-1 py-2 rounded-lg border border-slate-600 text-slate-400 hover:bg-slate-700"
+                      >
+                        Cancelar
+                      </button>
+                      <button
+                        onClick={handleCreateClient}
+                        disabled={creatingClient}
+                        className="flex-1 py-2 rounded-lg bg-violet-600 hover:bg-violet-500 text-white font-bold disabled:opacity-50"
+                      >
+                        {creatingClient ? 'Criando...' : 'Criar Cliente'}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {/* Search */}
               <div className="relative">
