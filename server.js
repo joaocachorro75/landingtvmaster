@@ -205,8 +205,7 @@ async function checkPixPaymentStatus(txId) {
 // SISTEMA DE NOTIFICAÇÕES WHATSAPP
 // ============================================
 
-const EVOLUTION_API_URL = 'https://automacao-evolution-api.nfeujb.easypanel.host';
-const EVOLUTION_API_KEY = '5BE128D18942-4B09-8AF8-454ADEEB06B1';
+// Usar constantes já declaradas no topo do arquivo
 
 async function sendWhatsAppNotification(phone, message) {
   try {
